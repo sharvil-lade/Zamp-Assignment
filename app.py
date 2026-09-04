@@ -4,13 +4,15 @@ Routes and rendering only. No validation, no rules, no AI.
 See docs/07-architecture.md.
 """
 
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+import extract
 import pipeline
 import store
 
@@ -47,18 +49,50 @@ def dashboard(request: Request):
     )
 
 
-@app.post("/submit")
-def submit(submission: dict = Body(...)):
-    """Accept a JSON vendor submission, run the pipeline, return the result.
+async def _intake(request: Request) -> str:
+    """Create the run from either a multipart form or a JSON body.
 
-    The body is deliberately an untyped dict, not a Pydantic model: a missing or
-    blank field must become an R01 *finding*, not a 422. Validation is the rule
-    engine's job, not the router's.
+    Multipart is the real submission channel: form field `submission` holds the
+    JSON, plus up to three file fields named after the document types. It always
+    creates the upload directory — even with zero attachments — so R02 reports
+    every document that is missing. A JSON-only body carries no documents at all,
+    so extraction is skipped entirely.
     """
+    if request.headers.get("content-type", "").startswith("multipart/form-data"):
+        form = await request.form()
+        try:
+            submission = json.loads(form.get("submission") or "{}")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(400, f"submission field is not valid JSON: {exc}")
+        if not isinstance(submission, dict):
+            raise HTTPException(400, "submission must be a JSON object")
+
+        run_id = store.create_run(submission.get("legal_entity_name"), submission)
+        dest = store.upload_dir(run_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        for doc_type in extract.DOC_TYPES:
+            upload = form.get(doc_type)
+            if upload is None or not getattr(upload, "filename", ""):
+                continue
+            suffix = Path(upload.filename).suffix.lower() or ".pdf"
+            (dest / f"{doc_type}{suffix}").write_bytes(await upload.read())
+        return run_id
+
+    submission = await request.json()
     if not isinstance(submission, dict):
         raise HTTPException(400, "submission must be a JSON object")
+    return store.create_run(submission.get("legal_entity_name"), submission)
 
-    run_id = store.create_run(submission.get("legal_entity_name"), submission)
+
+@app.post("/submit")
+async def submit(request: Request):
+    """Accept a vendor submission, run the pipeline, return the result.
+
+    The submission is deliberately an untyped dict, not a Pydantic model: a
+    missing or blank field must become an R01 *finding*, not a 422. Validation is
+    the rule engine's job, not the router's.
+    """
+    run_id = await _intake(request)
     status = pipeline.run(run_id)
     run = store.get_run(run_id)
 

@@ -1,4 +1,9 @@
 fastapi
 uvicorn[standard]
 jinja2
+python-multipart
+anthropic
 pytest
+
+# reportlab is only needed to regenerate samples/pdfs/ via samples/make_pdfs.py;
+# the committed PDFs mean the app itself never imports it.

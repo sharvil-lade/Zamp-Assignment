@@ -11,7 +11,7 @@ Rules return a **list**, not `Finding | None`: R01 and R10 can legitimately prod
 | ID | Description | Sev | Inputs | Expected finding | Demo |
 |---|---|---|---|---|---|
 | **R01** | A required submission field is empty or missing | FIX | all 14 fields | `Required field 'contact_phone' is missing` | **EC-2** |
-| **R02** | A required document was not attached | FIX | the 3 doc slots | `Required document 'Certificate of Incorporation' was not attached` | **EC-2** |
+| **R02** | A required document was not attached | FIX | the 3 doc slots (presence only) | `Required document 'Certificate of Incorporation' was not attached` | **EC-2** |
 | **R03** | PAN does not match `^[A-Z]{5}[0-9]{4}[A-Z]$` | FIX | `pan` | `PAN format is invalid` · expected `AAAAA9999A` · actual `ABCD1234F` | unit test |
 | **R04** | GSTIN fails the 15-char pattern or the **mod-36 checksum** | FIX | `gstin` | `GSTIN checksum is invalid — this is not an issued GST number` | unit test |
 | **R05** | IFSC does not match `^[A-Z]{4}0[A-Z0-9]{6}$` | FIX | `ifsc` | `IFSC format is invalid` · expected `AAAA0999999` | unit test |

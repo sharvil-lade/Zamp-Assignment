@@ -50,7 +50,7 @@ vendor-onboarding/
 | `app.py` | HTTP routes, file upload handling, kicking off the background run, rendering templates | contain any validation logic |
 | `pipeline.py` | Stage sequencing, event emission, status write-back, error containment | contain any rule logic |
 | `rules.py` | The 12 rules + `decide()`. **Pure functions.** | import `anthropic`, `httpx`, `sqlite3`, or read the clock |
-| `extract.py` | PDF/image to structured JSON via Claude | interpret or validate what it extracted |
+| `extract.py` | PDF/image to structured JSON via Claude; owns the 3 schemas and prompts | interpret or validate what it extracted, or touch `store` |
 | `matching.py` | Name normalization, similarity scoring, ambiguous-band escalation | emit findings or decide severity |
 | `store.py` | All SQL. Insert/read runs, findings, events | contain business logic |
 | `templates/` | Presentation | compute anything |
@@ -60,7 +60,8 @@ The strict rule is **`rules.py` imports nothing outside the stdlib and `dataclas
 ## Data flow
 
 ```
-POST /submit  (form fields + 3 files)
+POST /submit  (multipart: `submission` JSON field + 3 optional file fields,
+               or a plain application/json body with no documents)
     |
     +--> store.create_run()                -> run_id, status=RUNNING
     +--> save uploads to uploads/<run_id>/
@@ -72,9 +73,11 @@ POST /submit  (form fields + 3 files)
               |               store.add_event(stage_completed, duration_ms)
               |
               +- [1] intake        (snapshot already persisted)
-              +- [2] completeness  -> rules R01, R02
+              +- [2] completeness  -> rules R01, R02  (given a presence map, not
+              |                       extraction output - see docs/02)
               +- [3] extraction    -> extract.py -> store.set_extracted()
-              |                       + add_event(ai_call, model/response/usage)
+              |                       one add_event(ai_call, model/response/usage)
+              |                       per document actually attached
               +- [4] format        -> rules R03-R05
               +- [5] consistency   -> rules R06-R12  (matching.py may call Claude)
               +- [6] decision      -> rules.decide() -> store.set_status()

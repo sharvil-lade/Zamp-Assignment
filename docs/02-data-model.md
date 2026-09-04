@@ -92,6 +92,18 @@ class Finding:                     # rules return list[Finding]; [] means "rule 
 > `R06 · BLOCK · GSTIN-embedded PAN does not match submitted PAN`
 > expected `ABCFS1234K` · actual `ABCFS1234Z`
 
+**Document presence vs. document contents.** R02 asks "was this attached?", which is a
+directory listing, not an extraction result. So stage 2 is handed a **presence map** with the
+same shape as `extracted` — `{}` for attached, `None` for not — and stage 4 onward get the real
+extracted values. R02's code is identical either way and never sees model output. This is what
+lets completeness stay at stage 2, ahead of extraction: a vendor should not wait on three API
+calls to be told they forgot an attachment.
+
+`None` for the whole map (rather than a dict of `None`s) means the submission carried no
+documents *as a channel* at all — the JSON-only API path. Extraction is skipped and R02 stays
+silent. A multipart submit always creates the upload directory, even with zero files, so every
+missing document is reported.
+
 **Skip semantics.** A rule whose inputs are absent emits **nothing**. The absence is already reported by R01/R02; a rule must never double-report it. Example: if `incorporation_certificate` is missing, R02 fires and R12 stays silent.
 
 ## Persistence — 3 tables (SQLite)

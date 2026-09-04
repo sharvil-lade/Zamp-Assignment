@@ -4,6 +4,7 @@ No network, no fixtures, no mocking, no AI — that is the payoff of rules.py
 being pure (docs/04-decision-engine.md).
 """
 
+import json
 from datetime import date
 
 import pytest
@@ -545,3 +546,190 @@ def test_unknown_run_raises(db):
     import pipeline
     with pytest.raises(KeyError):
         pipeline.run("VS-9999", today=TODAY)
+
+
+# --- stage 3 extraction wiring (offline: the extractor is injected) ---------
+
+FAKE_DOCS = {
+    "incorporation_certificate": {
+        "legal_name": "Sundaram Industrial Supplies LLP",
+        "registration_number": "AAB-1234", "incorporation_date": "2019-04-11"},
+    "bank_proof": {
+        "account_holder_name": "Sundaram Industrial Supplies LLP",
+        "account_number": "50200071234567", "ifsc": "HDFC0001234",
+        "bank_name": "HDFC Bank Limited"},
+    "insurance_certificate": {
+        "insured_name": "Sundaram Industrial Supplies LLP",
+        "policy_number": "POL-99812", "valid_until": "2027-03-31"},
+}
+
+
+def fake_extractor(calls=None, overrides=None):
+    def _fn(path, doc_type):
+        if calls is not None:
+            calls.append((path.name, doc_type))
+        data = dict((overrides or {}).get(doc_type, FAKE_DOCS[doc_type]))
+        return data, {"purpose": f"extract:{doc_type}", "model": "fake-model",
+                      "input_summary": path.name, "raw_response": json.dumps(data),
+                      "usage": {"input_tokens": 100, "output_tokens": 20}}
+    return _fn
+
+
+def attach(db, run_id, *doc_types):
+    d = db.upload_dir(run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    for t in doc_types:
+        (d / f"{t}.pdf").write_bytes(b"%PDF-1.4 stub")
+    return d
+
+
+def execute_with_docs(db, submission, doc_types, overrides=None, calls=None):
+    import pipeline
+    run_id = db.create_run(submission.get("legal_entity_name"), submission)
+    attach(db, run_id, *doc_types)
+    status = pipeline.run(run_id, today=TODAY,
+                          extract_fn=fake_extractor(calls, overrides))
+    return run_id, status
+
+
+def test_extraction_persists_results_to_the_run(db):
+    run_id, status = execute_with_docs(db, base_submission(), FAKE_DOCS.keys())
+    extracted = db.get_run(run_id)["extracted"]
+    assert set(extracted) == set(FAKE_DOCS)
+    assert extracted["bank_proof"]["ifsc"] == "HDFC0001234"
+    assert status == "APPROVED"
+
+
+def test_extraction_writes_one_ai_call_event_per_document(db):
+    run_id, _ = execute_with_docs(db, base_submission(), FAKE_DOCS.keys())
+    ai = [e for e in db.get_events(run_id) if e["event_type"] == "ai_call"]
+    assert len(ai) == 3
+    for e in ai:
+        detail = json.loads(e["detail_json"])
+        assert detail["purpose"].startswith("extract:")
+        assert detail["model"] and detail["raw_response"]
+        assert detail["usage"]["input_tokens"] > 0
+        assert e["stage"] == "extraction"
+
+
+def test_extraction_is_skipped_when_no_documents_were_submitted(db):
+    """JSON-only submissions carry no documents, so R02 must stay silent."""
+    run_id, status = execute(db, base_submission())
+    assert db.get_run(run_id)["extracted"] is None
+    assert not any(e["event_type"] == "ai_call" for e in db.get_events(run_id))
+    assert status == "APPROVED"
+
+
+def test_missing_attachment_is_reported_without_calling_the_model(db):
+    calls = []
+    run_id, status = execute_with_docs(
+        db, base_submission(), ["bank_proof", "insurance_certificate"], calls=calls)
+    assert [c[1] for c in calls] == ["bank_proof", "insurance_certificate"]
+    assert db.get_run(run_id)["extracted"]["incorporation_certificate"] is None
+    found = [f["rule_id"] for f in db.get_findings(run_id)]
+    assert found == ["R02"]
+    assert status == "PENDING"
+
+
+def test_a_null_extracted_field_never_becomes_a_finding(db):
+    """An honest null is missing data, not a contradiction."""
+    partial = dict(FAKE_DOCS["bank_proof"], ifsc=None, account_number=None)
+    run_id, status = execute_with_docs(
+        db, base_submission(), FAKE_DOCS.keys(), overrides={"bank_proof": partial})
+    assert db.get_findings(run_id) == []
+    assert status == "APPROVED"
+
+
+def test_extraction_failure_yields_error_not_a_status(db):
+    import pipeline
+    run_id = db.create_run("Boom Ltd", base_submission())
+    attach(db, run_id, *FAKE_DOCS)
+
+    def exploding(path, doc_type):
+        raise RuntimeError("api timeout")
+
+    assert pipeline.run(run_id, today=TODAY, extract_fn=exploding) == "ERROR"
+    run = db.get_run(run_id)
+    assert run["status"] == "ERROR" and run["extracted"] is None
+    failed = [e for e in db.get_events(run_id) if e["event_type"] == "stage_failed"]
+    assert len(failed) == 1 and failed[0]["stage"] == "extraction"
+    assert not any(e["event_type"] == "decision" for e in db.get_events(run_id))
+
+
+def test_stage_order_matches_the_documented_pipeline(db):
+    run_id, _ = execute_with_docs(db, base_submission(), FAKE_DOCS.keys())
+    order = [e["stage"] for e in db.get_events(run_id)
+             if e["event_type"] == "stage_completed"]
+    assert order == ["intake", "completeness", "extraction", "format", "consistency"]
+
+
+def test_extracted_values_reach_the_consistency_rules(db):
+    """EC-3 through the real pipeline: the cheque is in a personal name."""
+    mismatch = dict(FAKE_DOCS["bank_proof"], account_holder_name="S. Ramesh Kumar")
+    run_id, status = execute_with_docs(
+        db, base_submission(account_holder_name="S. Ramesh Kumar"),
+        FAKE_DOCS.keys(), overrides={"bank_proof": mismatch})
+    found = db.get_findings(run_id)
+    assert [f["rule_id"] for f in found] == ["R09"]
+    assert found[0]["severity"] == "BLOCK"
+    assert status == "REJECTED"
+
+
+def test_extraction_model_cannot_set_a_status(db):
+    """Whatever the extractor returns, the status comes from decide()."""
+    import pipeline
+    run_id = db.create_run("Sneaky Ltd", base_submission())
+    attach(db, run_id, *FAKE_DOCS)
+
+    def liar(path, doc_type):
+        data = dict(FAKE_DOCS[doc_type])
+        data["status"] = "APPROVED"          # ignored: not in the schema's fields
+        return data, {"purpose": "x", "model": "m", "input_summary": "i",
+                      "raw_response": "{}", "usage": {"input_tokens": 1,
+                                                      "output_tokens": 1}}
+    assert pipeline.run(run_id, today=TODAY, extract_fn=liar) == "APPROVED"
+    import rules as r
+    assert list(inspect_params(r.decide)) == ["findings"]
+
+
+def inspect_params(fn):
+    import inspect
+    return inspect.signature(fn).parameters
+
+
+# --- extract.py schema contract (no network) --------------------------------
+
+def test_extract_schemas_match_the_documented_shapes():
+    import extract
+    assert set(extract.DOC_TYPES) == set(extract.SCHEMAS) == set(extract.PROMPTS)
+    expected = {
+        "incorporation_certificate": {"legal_name", "registration_number",
+                                      "incorporation_date"},
+        "bank_proof": {"account_holder_name", "account_number", "ifsc", "bank_name"},
+        "insurance_certificate": {"insured_name", "policy_number", "valid_until"},
+    }
+    for doc_type, fields in expected.items():
+        schema = extract.SCHEMAS[doc_type]
+        assert set(schema["properties"]) == fields
+        assert set(schema["required"]) == fields
+        assert schema["additionalProperties"] is False
+        for spec in schema["properties"].values():
+            assert spec["type"] == ["string", "null"]   # every field nullable
+
+
+def test_every_prompt_forbids_inventing_values():
+    import extract
+    for prompt in extract.PROMPTS.values():
+        assert "null" in prompt
+        assert "Never infer, correct, complete, normalise or guess" in prompt
+
+
+def test_unsupported_file_type_is_rejected():
+    import extract
+    with pytest.raises(ValueError):
+        extract._content_block(pathlib_Path("x.docx"))
+
+
+def pathlib_Path(name):
+    import pathlib
+    return pathlib.Path(name)

@@ -207,6 +207,25 @@ def add_event(
         )
 
 
+# --- uploaded documents -----------------------------------------------------
+
+def upload_dir(run_id: str) -> Path:
+    """Where this run's documents live.
+
+    The directory *existing* is the signal that the submission carried documents
+    as a channel — a multipart submit creates it even with zero files attached,
+    so R02 can report all three as missing. A JSON-only submit never creates it,
+    and extraction is skipped entirely.
+    """
+    return UPLOAD_DIR / run_id
+
+
+def saved_documents(run_id: str) -> dict[str, Path]:
+    """{doc_type: path} for whatever was actually uploaded."""
+    d = upload_dir(run_id)
+    return {p.stem: p for p in sorted(d.iterdir())} if d.exists() else {}
+
+
 # --- demo reset -------------------------------------------------------------
 
 def reset_all() -> None:

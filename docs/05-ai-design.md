@@ -34,7 +34,11 @@ Design notes:
 - **Structured outputs** (`output_config.format`) guarantee the shape — no defensive JSON parsing, no retry-on-malformed-JSON loop.
 - **`effort: "low"`** — extraction is transcription, not reasoning. The cost lever applied where it costs nothing.
 - **"Do not infer or correct values"** is load-bearing. If the model silently normalises `ABCDE1234K` to the PAN it saw elsewhere, R06 stops working. The extractor must be a faithful transcriber, not a helpful one.
-- **`null` is a valid answer**, not an error. Absence is a finding input.
+- **`null` is a valid answer**, not an error. Absence is a finding input. Verified against a
+  deliberately blank field on `samples/pdfs/bank_proof_illegible.pdf`: the model returns
+  `"ifsc": null` rather than borrowing the value from another document in the same run.
+- **A null never becomes a finding.** Missing data is missing data, not a contradiction — the
+  consistency rules skip absent inputs rather than treating them as mismatches.
 - **Extract once.** Results persist to `runs.extracted_json` at stage 3. Stages 4–6 only read. Re-deciding is free and deterministic.
 
 **Failure handling:** an API error or timeout raises, the run ends `ERROR` with a `stage_failed` event. It never silently produces a status. Demonstrated in Part 7.
