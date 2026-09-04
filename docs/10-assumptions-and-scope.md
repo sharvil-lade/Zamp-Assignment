@@ -1,0 +1,83 @@
+# 10 · Assumptions and Scope
+
+The case study says: *"treat ambiguity as part of the exercise. Make an assumption, note it somewhere you can reference in the live pitch, and move on."* This file is that note.
+
+## Explicit assumptions
+
+| # | Assumption | Why it's reasonable |
+|---|---|---|
+| A1 | The vendor submits through a **web form we control**, not by email | The brief says "you decide what the submission looks like". A structured form is what every real supplier portal does. |
+| A2 | **India is the primary jurisdiction**, with the US as a second country | Indian identifiers (GSTIN, PAN, IFSC) are self-describing and support genuine cross-field checks with no external calls. That is the strongest available demonstration in a week. |
+| A3 | Sample documents are **synthetic PDFs we generate** | The FAQ explicitly permits this: *"create vendor submission forms or JSON"*. |
+| A4 | **One reviewer, no authentication** | No multi-user requirement in the brief. Identity would be a text field if needed. |
+| A5 | Format validity is checked; **existence is not** | A tax ID can pass a checksum and still be unissued or cancelled. Existence needs a live registry call — deliberately deferred, see below. |
+| A6 | The follow-up email is **drafted, not sent** | The human-in-the-loop gate is a product decision, and it removes SMTP from scope. |
+| A7 | `expected_annual_spend`, payment terms, and commercial fields are **not collected** | They fed a risk-tier feature that was cut. Uncollected rather than unused. |
+| A8 | Documents are **single-page, English, digital or clean scans** | Multi-page and multi-language extraction is a real problem; it is not this problem. |
+| A9 | A **~400 ms per-stage pause** is intentional | Demo legibility. Marked in code as removable. |
+| A10 | Thresholds 0.92 / 0.75 / 0.70 are **tuned once against the sample set** | Four numbers nobody will change do not need a config system. |
+| A11 | The **PDF is the source of truth over the form** where they disagree | A document is harder to fabricate casually than a text input. This is why R09/R10/R12 compare extracted values against typed ones and not the reverse. |
+
+## MVP scope — what ships
+
+- 14-field submission form + 3 document uploads
+- 7-stage pipeline with visible per-stage execution
+- **12 deterministic rules**, BLOCK/FIX severity
+- **3-line `decide()`** — the only thing that sets a status
+- AI in exactly 3 places: extraction, ambiguous name matching, follow-up drafting
+- **4 demo scenarios**: happy path, missing/expired documents, bank beneficiary mismatch, cross-field identity contradiction
+- Live run view, dashboard, extracted-vs-form panel, audit timeline, JSON export
+- Human send gate on the follow-up
+- `/reset`
+- One test file
+
+## Deferred — named, not built
+
+These are real features of real systems. Each is out of scope on purpose, and each has a stated seam.
+
+| Deferred | Seam |
+|---|---|
+| **Sanctions / PEP screening** | A stage-5 rule against a name list. One function + a data source. |
+| **Duplicate vendor + reused bank account detection** | A stage-5 rule against a vendor master table. Needs seeded state — which is exactly what its removal deleted. |
+| **Penny-drop bank verification** | Replaces R09's document comparison with a bank-returned beneficiary name. Same rule, better input. |
+| **Live tax ID existence checks** (VIES, GST portal) | A new rule alongside R04. Format stays offline; existence becomes a call. |
+| **Reviewer queue, override-with-note, maker-checker** | A new event type on the existing append-only log. `decide()` unchanged. |
+| **Risk scoring / tiering** | Explicitly rejected, not merely deferred — see `04-decision-engine.md`. |
+| **Ongoing monitoring, re-screening, UBO traversal** | A scheduler over stored runs. |
+| **ERP / AP system sync** | A write step after `APPROVED`. |
+| **Email sending, vendor reply threading, resubmission linking** | SMTP plus a `parent_run_id` column. |
+| **Multi-page, multi-language document extraction** | A prompt and schema change in `extract.py`. |
+| **Additional countries** | Fixtures and an enum entry, not new rule logic. |
+
+## External integrations intentionally NOT implemented
+
+No live GST portal lookup. No VIES. No penny drop. No OFAC or sanctions feed. No corporate registry API. No credit bureau. No email provider.
+
+**The reasoning, ready for the interview:** every one of these is an auth flow, a rate limit, a network dependency, and a live-demo failure mode. Wiring a real KYB vendor into a case study spends a day of a six-day budget proving something nobody asked to see. The checks that shipped need **zero external dependencies** and still catch the fraud pattern the brief names.
+
+If asked *"where's sanctions screening?"* the answer is: **"Deliberately out of the MVP. It's a stage-5 rule against a name list — a function and a data source. I spent the time on the cross-field checks that need no external dependency, because those are the ones that catch the case the brief actually describes."**
+
+## Technical tradeoffs
+
+| Chose | Over | Because |
+|---|---|---|
+| HTMX polling every 700 ms | SSE / WebSockets | One HTML attribute vs. streaming code and reconnect logic. Nothing here needs sub-second latency. |
+| SQLite | Postgres | Single file, zero setup, no second process to fail at demo time. |
+| Raw `sqlite3` | SQLAlchemy | Three tables and about ten queries. An ORM is more code, not less. |
+| Server-rendered Jinja | React | No build step, no bundler, no npm. Four pages. |
+| Claude native PDF input | Tesseract / OCR pipeline | Replaces a day of preprocessing with one API parameter, and removes the digital-vs-scanned branch entirely. |
+| `difflib` (stdlib) | `rapidfuzz`, `fuzzywuzzy` | Already installed. A dependency for one ratio call is not worth it. |
+| Module constants | A config file | Four numbers, tuned once. |
+| `BackgroundTasks` | Celery + Redis | One reviewer, a handful of runs. Two extra processes for nothing. |
+| Findings-then-decide | Rules returning statuses directly | Makes reasoning visible for free, and makes `decide()` untouchable by rule changes. |
+| Deterministic decision | LLM-as-judge | Reproducible on camera, testable without mocking, explainable to a non-technical buyer. |
+
+## Known limitations — state these before being asked
+
+1. **No existence verification.** A structurally perfect but unissued GSTIN passes. Mitigation is a registry call; it is deferred, not overlooked.
+2. **Extraction is unverified against a second source.** If the model misreads an account number, R10 fires a false positive. The extracted-vs-form panel exists precisely so a human can catch this.
+3. **No duplicate detection.** The same vendor submitted twice produces two independent Approvals.
+4. **Single-jurisdiction depth.** The cross-field checks are India-specific. The US path validates format only.
+5. **No persistence of uploaded documents beyond the run.** `/reset` deletes them.
+
+Volunteering these is stronger than being caught by them. The brief says a strong submission handles edge cases *deliberately* — knowing precisely where your boundary is counts as deliberate.
