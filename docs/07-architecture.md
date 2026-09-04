@@ -31,9 +31,11 @@ vendor-onboarding/
 │   ├── dashboard.html
 │   └── _stages.html      HTMX polling fragment
 ├── samples/
+│   ├── make_pdfs.py     regenerates pdfs/ (reportlab)
+│   ├── make_fixtures.py regenerates the 4 scenario JSONs (computes the GSTIN)
 │   ├── ec1_happy.json  ec2_incomplete.json
 │   ├── ec3_bank_mismatch.json  ec4_crossfield.json
-│   └── pdfs/            generated sample documents
+│   └── pdfs/            6 generated sample documents
 ├── docs/             this directory
 ├── test_rules.py
 ├── requirements.txt
@@ -51,7 +53,7 @@ vendor-onboarding/
 | `pipeline.py` | Stage sequencing, event emission, status write-back, error containment | contain any rule logic |
 | `rules.py` | The 12 rules + `decide()`. **Pure functions.** | import `anthropic`, `httpx`, `sqlite3`, or read the clock |
 | `extract.py` | PDF/image to structured JSON via Claude; owns the 3 schemas and prompts | interpret or validate what it extracted, or touch `store` |
-| `matching.py` | Name normalization, similarity scoring, ambiguous-band escalation | emit findings or decide severity |
+| `matching.py` | Name normalization, similarity scoring, ambiguous-band escalation; returns a `NameVerdict` | emit findings, decide severity, or touch `store` (its model calls are reported through an `on_ai_call` callback the pipeline owns) |
 | `store.py` | All SQL. Insert/read runs, findings, events | contain business logic |
 | `templates/` | Presentation | compute anything |
 

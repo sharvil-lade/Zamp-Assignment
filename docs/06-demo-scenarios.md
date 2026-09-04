@@ -2,7 +2,7 @@
 
 Four scenarios. Each is a saved input loadable from a dropdown on the submit screen — no typing during the demo.
 
-> **Sample data note.** The GSTIN literals below are illustrative and are written as `29ABCFS1234K1Z<ck>`. The PAN is `ABCFS1234K`: its **4th character** is `F` (Firm/LLP), which is what R07 reads — not the trailing `K`. EC-4's PAN differs from the GSTIN-embedded one in the **last** character only, so R06 fires while R07 still sees a Firm/LLP code. Real sample fixtures are generated in Part 4 using `rules.gstin_checksum()` so that the 15th character is genuinely valid — otherwise R04 would fire in every scenario and mask the intended findings. **Never hand-write a GSTIN into a fixture.**
+> **Sample data note.** The GSTIN literals below are illustrative and are written as `29ABCFS1234K1Z3`. The PAN is `ABCFS1234K`: its **4th character** is `F` (Firm/LLP), which is what R07 reads — not the trailing `K`. EC-4's PAN differs from the GSTIN-embedded one in the **last** character only, so R06 fires while R07 still sees a Firm/LLP code. Real sample fixtures are generated in Part 4 using `rules.gstin_checksum()` so that the 15th character is genuinely valid — otherwise R04 would fire in every scenario and mask the intended findings. **Never hand-write a GSTIN into a fixture.**
 
 ---
 
@@ -15,7 +15,7 @@ Four scenarios. Each is a saved input loadable from a dropdown on the submit scr
 | entity_type | `LLP` |
 | country_of_incorporation | `IN` |
 | registered_address_state | `Karnataka` |
-| tax_id_type / gstin | `GSTIN` / `29ABCFS1234K1Z<ck>` |
+| tax_id_type / gstin | `GSTIN` / `29ABCFS1234K1Z3` (checksum computed) |
 | pan | `ABCFS1234K` |
 | account_holder_name | `Sundaram Industrial Supplies LLP` |
 | ifsc | `HDFC0001234` |
@@ -83,7 +83,7 @@ Same vendor as EC-1. Everything is complete, every format is valid, every cross-
 |---|---|---|
 | R09 | **BLOCK** | `Bank account is held in a different name than the vendor entity` · expected `Sundaram Industrial Supplies LLP` · actual `S. Ramesh Kumar` |
 
-Name score is roughly 0.11, a deterministic MISMATCH well below the 0.75 floor. No model call. Worth pointing out on camera: **the fraud case does not need the AI.**
+Name score is **0.348**, a deterministic MISMATCH well below the 0.75 floor. No model call. Worth pointing out on camera: **the fraud case does not need the AI.**
 
 R10 does **not** fire here — the account number and IFSC on the document match the form. R10 is covered by unit test.
 
@@ -101,7 +101,7 @@ All documents present and current. All formats valid. Nothing looks wrong on the
 
 | Field | Value | |
 |---|---|---|
-| gstin | `29ABCFS1234K1Z<ck>` | |
+| gstin | `29ABCFS1234K1Z3` | |
 | pan | `ABCFS1234Z` | changed |
 | entity_type | `Proprietorship` | changed |
 | registered_address_state | `Maharashtra` | changed |

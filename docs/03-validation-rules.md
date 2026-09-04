@@ -86,6 +86,12 @@ Both compare two entity names using `matching.names_match()` (see `05-ai-design.
 
 Same code, different context, justified by consequence. Worth 15 seconds of the demo.
 
+**A third outcome: uncertain.** When the comparator returns `match=None` (the model was not
+confident enough to decide, see `05-ai-design.md`), both rules emit a **FIX** tagged
+`ai_uncertain` instead of their normal finding. R09 is downgraded from BLOCK: an unsure model
+asks a human, it never rejects a vendor. It also never silently passes — the run becomes
+PENDING, not APPROVED.
+
 ### R11 uses an injected `today`
 
 `r11_document_expiry(submission, extracted, ctx)` reads `ctx.today` — never `date.today()` inside the rule. Otherwise the test suite breaks the day the sample data expires, and the demo silently changes behaviour over time.

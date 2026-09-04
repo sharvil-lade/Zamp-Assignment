@@ -64,13 +64,38 @@ def normalize_name(name: str) -> str:
     return _NON_ALNUM.sub(" ", (name or "").upper()).strip()
 
 
-def default_names_match(a: str, b: str) -> bool:
+@dataclass(frozen=True)
+class NameVerdict:
+    """`match=None` means *uncertain* — route to a human, never to a rejection."""
+
+    match: bool | None
+    reason: str | None = None
+    score: float | None = None
+
+
+def default_names_match(a: str, b: str) -> NameVerdict:
+    """Pure stdlib comparator. Never returns uncertain — it has no one to ask."""
     na, nb = normalize_name(a), normalize_name(b)
     if not na or not nb:
-        return False
+        return NameVerdict(False)
     if na == nb:
-        return True
-    return SequenceMatcher(None, na, nb).ratio() >= 0.92
+        return NameVerdict(True, score=1.0)
+    score = SequenceMatcher(None, na, nb).ratio()
+    return NameVerdict(score >= 0.92, score=score)
+
+
+def _verdict(result) -> NameVerdict:
+    """Accept a bare bool from a simple injected comparator, or a full verdict."""
+    return result if isinstance(result, NameVerdict) else NameVerdict(bool(result))
+
+
+def _uncertain_finding(rule_id: str, a: str, b: str, verdict: NameVerdict) -> Finding:
+    """An unsure model asks a human. It never rejects, and never silently passes."""
+    reason = f" ({verdict.reason})" if verdict.reason else ""
+    return Finding(rule_id, FIX, STAGE_CONSISTENCY,
+                   f"Could not confidently determine whether '{a}' and '{b}' are "
+                   f"the same entity — human review required{reason}",
+                   expected=a, actual=b, tag="ai_uncertain")
 
 
 # --- reference data ---------------------------------------------------------
@@ -286,8 +311,11 @@ def r09_bank_holder_name(submission: dict, extracted, ctx: RuleContext) -> list[
     holder = (bank or {}).get("account_holder_name")
     if not bank or not holder or not entity:
         return []
-    if ctx.names_match(entity, holder):
+    verdict = _verdict(ctx.names_match(entity, holder))
+    if verdict.match is True:
         return []
+    if verdict.match is None:                  # unsure: ask a human, do not reject
+        return [_uncertain_finding("R09", entity, holder, verdict)]
     return [Finding("R09", BLOCK, STAGE_CONSISTENCY,
                     "Bank account is held in a different name than the vendor entity",
                     expected=entity, actual=holder)]
@@ -341,8 +369,11 @@ def r12_incorporation_name(submission: dict, extracted, ctx: RuleContext) -> lis
     doc_name = (doc or {}).get("legal_name")
     if not doc or not doc_name or not entity:
         return []
-    if ctx.names_match(entity, doc_name):
+    verdict = _verdict(ctx.names_match(entity, doc_name))
+    if verdict.match is True:
         return []
+    if verdict.match is None:
+        return [_uncertain_finding("R12", entity, doc_name, verdict)]
     return [Finding("R12", FIX, STAGE_CONSISTENCY,
                     "Legal name on the incorporation certificate differs from the "
                     "submitted name",

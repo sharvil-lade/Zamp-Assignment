@@ -71,7 +71,36 @@ Roughly 90% of comparisons never reach a model. When asked *"why AI here?"* the 
 
 This is the honest handling of an unsure model, and it is one of the two human-in-the-loop points. Note the severity downgrade: an uncertain match becomes Pending (ask a human), never Rejected.
 
-**Thresholds are constants at the top of `matching.py`**, not config. They are tuned once against the sample set during Part 4 and then left alone.
+**The comparator returns a verdict, not a bool.** `NameVerdict(match, reason, score)` where
+`match` is `True` / `False` / **`None` = uncertain**. A bool cannot express "ask a human", and
+that third answer is the whole point of the low-confidence path. `rules.py` owns the type (it is
+pure), `matching.py` returns it, and a bare `bool` from a simpler injected comparator is still
+accepted.
+
+**Model calls are memoised per run.** R09 and R12 frequently compare the same two strings; asking
+twice costs a second call and puts a duplicate row in the audit trail. A cache hit emits no
+`ai_call` event — only real calls belong in the record.
+
+**Thresholds are constants at the top of `matching.py`**, not config. Tuned once against the
+sample set in Part 4, then left alone:
+
+| Pair | Score | Band |
+|---|---|---|
+| `Sundaram Industrial Supplies LLP` / `SUNDARAM INDUSTRIAL SUPPLIES, LLP.` | 1.000 | match |
+| `Acme Technologies Pvt Ltd` / `Acme Tech Private Limited` | 1.000 | match |
+| `Krishna Auto Components Pvt Ltd` / `Krishna Auto Component Pvt Ltd` | 0.987 | match |
+| `Global Marine Services LLP` / `Global Marine Supplies LLP` | 0.846 | **ask** |
+| `Sundaram Industrial Supplies LLP` / `Sundaram Industrial Enterprises LLP` | 0.806 | **ask** |
+| `Deccan Packaging Industries` / `Deccan Packaging Ind. Pvt Ltd` | 0.771 | **ask** |
+| `Meridian Logistics LLP` / `Meridian Logistics Private Limited` | 0.714 | mismatch |
+| `Sundaram Industrial Supplies LLP` / `S. Ramesh Kumar` | 0.348 | mismatch |
+
+Legal-form suffixes are **expanded, never stripped**: dropping them would make
+`Meridian Logistics LLP` and `Meridian Logistics Private Limited` identical, and those are
+different companies.
+
+**None of the four demo scenarios reaches the model for name matching** — a deliberate
+demo-stability property, asserted by a test. EC-3's fraud case sits at 0.348.
 
 ## 3. Follow-up email drafting — stage 7
 

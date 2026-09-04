@@ -1,0 +1,26 @@
+{
+  "label": "EC-1 \u00b7 Happy path",
+  "expected_status": "APPROVED",
+  "expected_rules": [],
+  "documents": {
+    "incorporation_certificate": "incorporation_certificate.pdf",
+    "bank_proof": "bank_proof.pdf",
+    "insurance_certificate": "insurance_certificate.pdf"
+  },
+  "submission": {
+    "legal_entity_name": "Sundaram Industrial Supplies LLP",
+    "entity_type": "LLP",
+    "country_of_incorporation": "IN",
+    "registered_address_state": "Karnataka",
+    "contact_name": "Priya Raghavan",
+    "contact_email": "priya@sundaramsupplies.in",
+    "contact_phone": "+91 80 4123 7788",
+    "tax_id_type": "GSTIN",
+    "gstin": "29ABCFS1234K1Z3",
+    "pan": "ABCFS1234K",
+    "account_holder_name": "Sundaram Industrial Supplies LLP",
+    "account_number": "50200071234567",
+    "ifsc": "HDFC0001234",
+    "bank_name": "HDFC Bank"
+  }
+}

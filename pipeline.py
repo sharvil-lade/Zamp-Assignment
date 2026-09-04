@@ -12,6 +12,7 @@ import traceback
 from datetime import date
 
 import extract
+import matching
 import rules
 import store
 
@@ -93,6 +94,24 @@ def run(run_id: str, *, today: date | None = None, names_match=None,
 
     submission = run_row["submission"]
     extracted = run_row["extracted"]
+    if names_match is None:
+        # matching.py must not touch store, so its model calls are reported back
+        # through a callback the pipeline owns. Same shape as an extraction
+        # ai_call, so the audit timeline renders both identically.
+        #
+        # Memoised per run: R09 and R12 often compare the same two strings, and
+        # asking twice costs a second call and puts a duplicate entry in the
+        # audit trail. A cache hit emits no event, which is correct — only real
+        # calls belong in the record.
+        seen: dict = {}
+
+        def names_match(a, b):
+            if (a, b) not in seen:
+                seen[(a, b)] = matching.names_match(
+                    a, b, on_ai_call=lambda meta: store.add_event(
+                        run_id, "consistency", "ai_call", detail=meta))
+            return seen[(a, b)]
+
     ctx = rules.RuleContext(today=today or date.today(), names_match=names_match)
     extract_fn = extract_fn or extract.extract_document
     findings: list[rules.Finding] = []

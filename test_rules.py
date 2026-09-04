@@ -412,7 +412,7 @@ def test_ec3_resolves_without_the_ai_comparator():
             AssertionError("AI must not be consulted here")))
     submission = base_submission(account_holder_name="S. Ramesh Kumar")
     assert rules.default_names_match(
-        submission["legal_entity_name"], "S. Ramesh Kumar") is False
+        submission["legal_entity_name"], "S. Ramesh Kumar").match is False
     # and with a comparator that refuses to answer, R09 still would have to ask,
     # proving the call site exists but the deterministic path decides the case:
     with pytest.raises(AssertionError):
@@ -733,3 +733,238 @@ def test_unsupported_file_type_is_rejected():
 def pathlib_Path(name):
     import pathlib
     return pathlib.Path(name)
+
+
+# --- matching.py: normalization and the three bands -------------------------
+
+def boom_ask(a, b, on_ai_call=None):
+    raise AssertionError("the model must not be consulted for this pair")
+
+
+def test_normalize_expands_legal_form_abbreviations():
+    import matching
+    assert matching.normalize("Acme Tech Pvt. Ltd.") == "ACME TECHNOLOGIES PRIVATE LIMITED"
+    assert matching.normalize("acme  technologies,  private limited") == \
+        "ACME TECHNOLOGIES PRIVATE LIMITED"
+
+
+def test_similarity_is_symmetric_and_bounded():
+    import matching
+    a, b = "Sundaram Industrial Supplies LLP", "Sundaram Inds. Supplies LLP"
+    assert matching.similarity(a, b) == matching.similarity(b, a)
+    assert 0.0 <= matching.similarity(a, b) <= 1.0
+    assert matching.similarity(a, a) == 1.0
+    assert matching.similarity("", "anything") == 0.0
+
+
+def test_different_legal_form_is_not_the_same_entity():
+    """Suffixes are expanded, never stripped: an LLP is not a Private Limited."""
+    import matching
+    v = matching.names_match("Meridian Logistics LLP",
+                             "Meridian Logistics Private Limited", ask=boom_ask)
+    assert v.match is False
+
+
+@pytest.mark.parametrize("a,b", [
+    ("Sundaram Industrial Supplies LLP", "Sundaram Industrial Supplies LLP"),
+    ("Sundaram Industrial Supplies LLP", "SUNDARAM INDUSTRIAL SUPPLIES, LLP."),
+    ("Acme Technologies Pvt Ltd", "Acme Tech Private Limited"),
+])
+def test_obvious_matches_never_reach_the_model(a, b):
+    import matching
+    v = matching.names_match(a, b, ask=boom_ask)
+    assert v.match is True and v.score >= matching.MATCH_THRESHOLD
+
+
+@pytest.mark.parametrize("a,b", [
+    ("Sundaram Industrial Supplies LLP", "S. Ramesh Kumar"),
+    ("Acme Technologies Pvt Ltd", "Acme Holdings LLC"),
+])
+def test_obvious_mismatches_never_reach_the_model(a, b):
+    import matching
+    v = matching.names_match(a, b, ask=boom_ask)
+    assert v.match is False and v.score <= matching.MISMATCH_THRESHOLD
+
+
+def test_only_the_ambiguous_band_escalates():
+    import matching
+    asked = []
+
+    def ask(a, b, on_ai_call=None):
+        asked.append((a, b))
+        return rules.NameVerdict(True, reason="stub")
+
+    v = matching.names_match("Global Marine Services LLP",
+                             "Global Marine Supplies LLP", ask=ask)
+    assert len(asked) == 1
+    assert matching.MISMATCH_THRESHOLD < v.score < matching.MATCH_THRESHOLD
+    assert v.match is True
+
+
+def test_low_model_confidence_becomes_uncertain_not_a_decision(monkeypatch):
+    import anthropic
+    import matching
+
+    payload = json.dumps({"same_entity": True, "confidence": 0.41,
+                          "reason": "genuinely unclear"})
+    block = type("B", (), {"type": "text", "text": payload})()
+    resp = type("R", (), {"content": [block],
+                          "usage": type("U", (), {"input_tokens": 10,
+                                                  "output_tokens": 5})()})()
+    fake = type("C", (), {"messages": type("M", (), {
+        "create": staticmethod(lambda **kw: resp)})()})
+    monkeypatch.setattr(anthropic, "Anthropic", lambda *a, **k: fake)
+
+    v = matching._ask_claude("A Industries LLP", "A Industrial LLP")
+    assert v.match is None                     # uncertain, not True
+    assert "0.41" in v.reason
+
+
+# --- the ai_uncertain path through the rules --------------------------------
+
+def uncertain(a, b):
+    return rules.NameVerdict(None, reason="model confidence 0.40: unclear")
+
+
+def test_uncertain_name_match_downgrades_r09_to_fix():
+    ctx = RuleContext(today=TODAY, names_match=uncertain)
+    ext = base_extracted(bank_proof={
+        "account_holder_name": "Sundaram Inds. Supplies LLP",
+        "account_number": "50200071234567", "ifsc": "HDFC0001234",
+        "bank_name": "HDFC Bank"})
+    found = rules.r09_bank_holder_name(base_submission(), ext, ctx)
+    assert len(found) == 1
+    f = found[0]
+    assert f.rule_id == "R09"
+    assert f.severity == FIX                   # never REJECTED on uncertainty
+    assert f.tag == "ai_uncertain"
+    assert "human review required" in f.message
+
+
+def test_uncertain_name_match_never_silently_approves(db):
+    import pipeline
+    run_id = db.create_run("Ambiguous Ltd", base_submission())
+    attach(db, run_id, *FAKE_DOCS)
+    status = pipeline.run(run_id, today=TODAY, names_match=uncertain,
+                          extract_fn=fake_extractor())
+    assert status == "PENDING"                 # not APPROVED, not REJECTED
+    assert "ai_uncertain" in [f["tag"] for f in db.get_findings(run_id)]
+
+
+def test_name_matching_failure_yields_error_not_approval(db):
+    """An AI outage must not become a silent approval."""
+    import pipeline
+
+    def exploding(a, b):
+        raise RuntimeError("anthropic timeout")
+
+    run_id = db.create_run("Outage Ltd", base_submission())
+    attach(db, run_id, *FAKE_DOCS)
+    assert pipeline.run(run_id, today=TODAY, names_match=exploding,
+                        extract_fn=fake_extractor()) == "ERROR"
+    assert db.get_run(run_id)["status"] == "ERROR"
+    assert not any(e["event_type"] == "decision" for e in db.get_events(run_id))
+
+
+# --- the four fixtures, end to end (offline) --------------------------------
+
+FIXTURE_EXTRACTIONS = {
+    "incorporation_certificate.pdf": {
+        "legal_name": "Sundaram Industrial Supplies LLP",
+        "registration_number": "AAB-1234", "incorporation_date": "2019-04-11"},
+    "bank_proof.pdf": {
+        "account_holder_name": "Sundaram Industrial Supplies LLP",
+        "account_number": "50200071234567", "ifsc": "HDFC0001234",
+        "bank_name": "HDFC Bank Limited"},
+    "bank_proof_mismatch.pdf": {
+        "account_holder_name": "S. Ramesh Kumar",
+        "account_number": "50200071234567", "ifsc": "HDFC0001234",
+        "bank_name": "HDFC Bank Limited"},
+    "insurance_certificate.pdf": {
+        "insured_name": "Sundaram Industrial Supplies LLP",
+        "policy_number": "POL-99812", "valid_until": "2027-03-31"},
+    "insurance_certificate_expired.pdf": {
+        "insured_name": "Sundaram Industrial Supplies LLP",
+        "policy_number": "POL-99812", "valid_until": "2026-07-21"},
+}
+
+
+def fixture_extractor(path, doc_type):
+    """Replays what the real extractor returned for that source PDF in Part 3."""
+    source = path.read_text(encoding="utf-8").split(":", 1)[1]
+    data = dict(FIXTURE_EXTRACTIONS[source])
+    return data, {"purpose": "extract:" + doc_type, "model": "replay",
+                  "input_summary": source, "raw_response": json.dumps(data),
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}
+
+
+def load_scenario(name):
+    import pathlib
+    return json.loads((pathlib.Path("samples") / (name + ".json")).read_text("utf-8"))
+
+
+def run_scenario(db, name, calls):
+    import matching
+    import pipeline
+    sc = load_scenario(name)
+    run_id = db.create_run(sc["submission"]["legal_entity_name"], sc["submission"])
+    d = db.upload_dir(run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    for doc_type, source in sc["documents"].items():
+        (d / (doc_type + ".pdf")).write_text("stub:" + source, encoding="utf-8")
+
+    def recording_ask(a, b, on_ai_call=None):
+        calls.append((a, b))
+        return rules.NameVerdict(False, reason="escalated")
+
+    def counting_match(a, b):
+        return matching.names_match(a, b, ask=recording_ask)
+
+    status = pipeline.run(run_id, today=TODAY, names_match=counting_match,
+                          extract_fn=fixture_extractor)
+    return sc, run_id, status
+
+
+SCENARIO_NAMES = ["ec1_happy", "ec2_incomplete", "ec3_bank_mismatch", "ec4_crossfield"]
+
+
+@pytest.mark.parametrize("name", SCENARIO_NAMES)
+def test_fixture_produces_its_documented_status_and_findings(db, name):
+    calls = []
+    sc, run_id, status = run_scenario(db, name, calls)
+    assert status == sc["expected_status"], sc["label"]
+    found = sorted({f["rule_id"] for f in db.get_findings(run_id)})
+    assert found == sc["expected_rules"], sc["label"]
+
+
+def test_ec3_makes_no_model_call_for_name_matching(db):
+    """The fraud case is settled deterministically — the score is far below the band."""
+    calls = []
+    _, run_id, status = run_scenario(db, "ec3_bank_mismatch", calls)
+    assert calls == []
+    assert status == "REJECTED"
+    ai = [e for e in db.get_events(run_id) if e["event_type"] == "ai_call"]
+    assert ai and all(json.loads(e["detail_json"])["purpose"].startswith("extract:")
+                      for e in ai)
+
+
+def test_no_fixture_needs_the_name_comparator(db):
+    """All four demos resolve without escalation — a demo-stability property."""
+    for name in SCENARIO_NAMES:
+        calls = []
+        run_scenario(db, name, calls)
+        assert calls == [], name + " escalated to the model"
+
+
+def test_fixture_gstins_carry_a_valid_checksum():
+    for name in SCENARIO_NAMES:
+        g = load_scenario(name)["submission"]["gstin"]
+        assert gstin_checksum(g[:14]) == g[14], name + " has a hand-written GSTIN"
+
+
+def test_matching_module_never_emits_findings_or_statuses():
+    import pathlib
+    src = pathlib.Path("matching.py").read_text(encoding="utf-8")
+    assert "Finding(" not in src
+    for word in ("APPROVED", "PENDING", "REJECTED"):
+        assert word not in src, "matching.py must not mention " + word
