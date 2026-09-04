@@ -73,7 +73,11 @@ This is the brief's *"history, status, and outputs across runs"*, literally.
 Two surfaces, no third:
 
 1. **Timeline** on the run page — human-readable, expandable.
-2. **Export JSON** — machine-readable and complete: submission snapshot, extracted values, all findings, all events, final status.
+2. **Export JSON** — machine-readable and complete. `GET /run/{id}/export` returns seven
+   sections: `run` · `submission` · `extracted` · `findings` · `communication` · `events` ·
+   `exported_at`. Event details are decoded, so the file is readable without unpacking JSON
+   strings. `communication` reports `draft_exists`, `draft`, `sent`, `sent_at`, `sent_by`, and
+   the `internal_note` for rejected runs.
 
 Spend 30 seconds of the demo on the export button. It quotes the brief's own pain statement — *"the only audit trail is whatever's in someone's inbox"* — back at them.
 

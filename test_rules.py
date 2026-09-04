@@ -470,7 +470,7 @@ def db(tmp_path, monkeypatch):
 def execute(db, submission):
     import pipeline
     run_id = db.create_run(submission.get("legal_entity_name"), submission)
-    status = pipeline.run(run_id, today=TODAY)
+    status = pipeline.run(run_id, today=TODAY, draft_fn=fake_drafter())
     return run_id, status
 
 
@@ -501,8 +501,9 @@ def test_pipeline_persists_findings_and_events(db):
     run_id, _ = execute(db, base_submission(contact_phone=""))
     assert len(db.get_findings(run_id)) == 1
     kinds = [e["event_type"] for e in db.get_events(run_id)]
-    assert kinds.count("stage_started") == 4        # intake, completeness, format, consistency
-    assert kinds.count("stage_completed") == 4
+    # intake, completeness, format, consistency, communicate (no docs -> no extraction)
+    assert kinds.count("stage_started") == 5
+    assert kinds.count("stage_completed") == 5
     assert "decision" in kinds
     assert all(e["actor"] == "system" for e in db.get_events(run_id))
 
@@ -523,7 +524,7 @@ def test_pipeline_runs_every_stage_in_order(db):
     run_id, _ = execute(db, base_submission())
     order = [e["stage"] for e in db.get_events(run_id)
              if e["event_type"] == "stage_completed"]
-    assert order == ["intake", "completeness", "format", "consistency"]
+    assert order == ["intake", "completeness", "format", "consistency", "communicate"]
 
 
 def test_error_is_distinct_from_rejected(db, monkeypatch):
@@ -587,7 +588,7 @@ def execute_with_docs(db, submission, doc_types, overrides=None, calls=None):
     import pipeline
     run_id = db.create_run(submission.get("legal_entity_name"), submission)
     attach(db, run_id, *doc_types)
-    status = pipeline.run(run_id, today=TODAY,
+    status = pipeline.run(run_id, today=TODAY, draft_fn=fake_drafter(),
                           extract_fn=fake_extractor(calls, overrides))
     return run_id, status
 
@@ -648,7 +649,8 @@ def test_extraction_failure_yields_error_not_a_status(db):
     def exploding(path, doc_type):
         raise RuntimeError("api timeout")
 
-    assert pipeline.run(run_id, today=TODAY, extract_fn=exploding) == "ERROR"
+    assert pipeline.run(run_id, today=TODAY, extract_fn=exploding,
+                        draft_fn=fake_drafter()) == "ERROR"
     run = db.get_run(run_id)
     assert run["status"] == "ERROR" and run["extracted"] is None
     failed = [e for e in db.get_events(run_id) if e["event_type"] == "stage_failed"]
@@ -660,7 +662,8 @@ def test_stage_order_matches_the_documented_pipeline(db):
     run_id, _ = execute_with_docs(db, base_submission(), FAKE_DOCS.keys())
     order = [e["stage"] for e in db.get_events(run_id)
              if e["event_type"] == "stage_completed"]
-    assert order == ["intake", "completeness", "extraction", "format", "consistency"]
+    assert order == ["intake", "completeness", "extraction", "format",
+                     "consistency", "communicate"]
 
 
 def test_extracted_values_reach_the_consistency_rules(db):
@@ -846,7 +849,7 @@ def test_uncertain_name_match_never_silently_approves(db):
     run_id = db.create_run("Ambiguous Ltd", base_submission())
     attach(db, run_id, *FAKE_DOCS)
     status = pipeline.run(run_id, today=TODAY, names_match=uncertain,
-                          extract_fn=fake_extractor())
+                          extract_fn=fake_extractor(), draft_fn=fake_drafter())
     assert status == "PENDING"                 # not APPROVED, not REJECTED
     assert "ai_uncertain" in [f["tag"] for f in db.get_findings(run_id)]
 
@@ -861,7 +864,7 @@ def test_name_matching_failure_yields_error_not_approval(db):
     run_id = db.create_run("Outage Ltd", base_submission())
     attach(db, run_id, *FAKE_DOCS)
     assert pipeline.run(run_id, today=TODAY, names_match=exploding,
-                        extract_fn=fake_extractor()) == "ERROR"
+                        extract_fn=fake_extractor(), draft_fn=fake_drafter()) == "ERROR"
     assert db.get_run(run_id)["status"] == "ERROR"
     assert not any(e["event_type"] == "decision" for e in db.get_events(run_id))
 
@@ -921,7 +924,7 @@ def run_scenario(db, name, calls):
         return matching.names_match(a, b, ask=recording_ask)
 
     status = pipeline.run(run_id, today=TODAY, names_match=counting_match,
-                          extract_fn=fixture_extractor)
+                          extract_fn=fixture_extractor, draft_fn=fake_drafter())
     return sc, run_id, status
 
 
@@ -968,3 +971,233 @@ def test_matching_module_never_emits_findings_or_statuses():
     assert "Finding(" not in src
     for word in ("APPROVED", "PENDING", "REJECTED"):
         assert word not in src, "matching.py must not mention " + word
+
+
+# --- stage 7: communication -------------------------------------------------
+
+def fake_drafter(calls=None):
+    def _fn(run_id, vendor_name, contact_name, findings):
+        if calls is not None:
+            calls.append({"run_id": run_id, "vendor": vendor_name,
+                          "contact": contact_name, "findings": findings})
+        lines = "\n".join("%d. %s" % (i, f["message"])
+                          for i, f in enumerate(findings, 1))
+        text = ("Subject: Additional information needed (%s)\n\nHi %s,\n\n%s\n\n"
+                "Send these over and we'll pick the review back up."
+                % (run_id, contact_name.split()[0], lines))
+        return text, {"purpose": "draft_followup", "model": "fake-model",
+                      "input_summary": "%d finding(s)" % len(findings),
+                      "raw_response": text,
+                      "usage": {"input_tokens": 50, "output_tokens": 60}}
+    return _fn
+
+
+def run_scenario_with_draft(db, name, drafts=None):
+    import matching
+    import pipeline
+    sc = load_scenario(name)
+    run_id = db.create_run(sc["submission"]["legal_entity_name"], sc["submission"])
+    d = db.upload_dir(run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    for doc_type, source in sc["documents"].items():
+        (d / (doc_type + ".pdf")).write_text("stub:" + source, encoding="utf-8")
+
+    def no_escalation(a, b, on_ai_call=None):
+        raise AssertionError("no fixture should escalate")
+
+    status = pipeline.run(
+        run_id, today=TODAY, extract_fn=fixture_extractor,
+        names_match=lambda a, b: matching.names_match(a, b, ask=no_escalation),
+        draft_fn=fake_drafter(drafts))
+    return sc, run_id, status
+
+
+def test_ec2_pending_produces_an_itemised_draft(db):
+    drafts = []
+    sc, run_id, status = run_scenario_with_draft(db, "ec2_incomplete", drafts)
+    assert status == "PENDING"
+
+    draft = db.get_run(run_id)["followup_draft"]
+    assert draft is not None
+    assert draft.startswith("Subject: ")
+    assert run_id in draft
+    # every actionable finding is itemised, including the date
+    assert "21 July 2026" in draft
+    assert "Certificate of Incorporation" in draft
+    assert "contact_phone" in draft
+    assert len(drafts) == 1 and len(drafts[0]["findings"]) == 3
+
+
+@pytest.mark.parametrize("name", ["ec1_happy", "ec3_bank_mismatch", "ec4_crossfield"])
+def test_approved_and_rejected_never_get_a_draft(db, name):
+    drafts = []
+    sc, run_id, status = run_scenario_with_draft(db, name, drafts)
+    assert status in ("APPROVED", "REJECTED")
+    assert db.get_run(run_id)["followup_draft"] is None
+    assert drafts == []
+
+
+def test_rejected_records_an_internal_note_instead(db):
+    _, run_id, status = run_scenario_with_draft(db, "ec3_bank_mismatch")
+    assert status == "REJECTED"
+    note = [e for e in db.get_events(run_id) if e["event_type"] == "internal_note"]
+    assert len(note) == 1
+    detail = json.loads(note[0]["detail_json"])
+    assert detail["blocking_rules"] == ["R09"]
+    assert "different name" in detail["note"]
+    assert db.get_run(run_id)["followup_draft"] is None
+
+
+def test_approved_run_has_no_communication_output(db):
+    _, run_id, _ = run_scenario_with_draft(db, "ec1_happy")
+    outcomes = [json.loads(e["detail_json"])["outcome"]
+                for e in db.get_events(run_id)
+                if e["event_type"] == "stage_completed" and e["stage"] == "communicate"]
+    assert outcomes == ["no_communication_needed"]
+
+
+def test_drafter_never_receives_the_raw_submission(db):
+    """It gets a vendor name, a contact name, and findings. Nothing else."""
+    drafts = []
+    run_scenario_with_draft(db, "ec2_incomplete", drafts)
+    passed = drafts[0]
+    assert set(passed) == {"run_id", "vendor", "contact", "findings"}
+    for f in passed["findings"]:
+        assert set(f) <= {"message", "expected", "actual"}
+        assert "severity" not in f and "rule_id" not in f
+
+
+def test_ai_uncertain_findings_are_not_sent_to_the_vendor(db):
+    """Our uncertainty is a reviewer's problem, not the vendor's."""
+    import pipeline
+    drafts = []
+    run_id = db.create_run("Ambiguous Ltd", base_submission())
+    attach(db, run_id, *FAKE_DOCS)
+    status = pipeline.run(run_id, today=TODAY, names_match=uncertain,
+                          extract_fn=fake_extractor(), draft_fn=fake_drafter(drafts))
+    assert status == "PENDING"
+    assert "ai_uncertain" in [f["tag"] for f in db.get_findings(run_id)]
+    assert drafts == []                                  # nothing actionable
+    assert db.get_run(run_id)["followup_draft"] is None
+
+
+def test_drafting_failure_does_not_destroy_the_decision(db):
+    import pipeline
+
+    def exploding(*a, **k):
+        raise RuntimeError("anthropic down")
+
+    sc = load_scenario("ec2_incomplete")
+    run_id = db.create_run(sc["submission"]["legal_entity_name"], sc["submission"])
+    d = db.upload_dir(run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    for doc_type, source in sc["documents"].items():
+        (d / (doc_type + ".pdf")).write_text("stub:" + source, encoding="utf-8")
+
+    status = pipeline.run(run_id, today=TODAY, extract_fn=fixture_extractor,
+                          draft_fn=exploding)
+    assert status == "PENDING"                           # not ERROR
+    assert db.get_run(run_id)["status"] == "PENDING"
+    failed = [e for e in db.get_events(run_id) if e["event_type"] == "stage_failed"]
+    assert len(failed) == 1 and failed[0]["stage"] == "communicate"
+
+
+# --- the human send gate ----------------------------------------------------
+
+def test_a_draft_is_not_a_sent_message(db):
+    _, run_id, _ = run_scenario_with_draft(db, "ec2_incomplete")
+    run = db.get_run(run_id)
+    assert run["followup_draft"] is not None
+    assert run["followup_sent_at"] is None                # the gate
+    assert not any(e["event_type"] == "followup_sent" for e in db.get_events(run_id))
+
+
+def test_marking_sent_records_actor_and_timestamp(db):
+    _, run_id, _ = run_scenario_with_draft(db, "ec2_incomplete")
+    ts = db.mark_followup_sent(run_id, db.get_run(run_id)["followup_draft"])
+    db.add_event(run_id, "communicate", "followup_sent", actor="user:priya",
+                 detail={"actor": "priya", "edited": False})
+    run = db.get_run(run_id)
+    assert run["followup_sent_at"] == ts
+    sent = [e for e in db.get_events(run_id) if e["event_type"] == "followup_sent"]
+    assert len(sent) == 1 and sent[0]["actor"] == "user:priya"
+
+
+def test_editing_before_sending_is_recorded(db):
+    _, run_id, _ = run_scenario_with_draft(db, "ec2_incomplete")
+    original = db.get_run(run_id)["followup_draft"]
+    edited = original + "\n\nPS: please also confirm your GST filing frequency."
+    db.mark_followup_sent(run_id, edited)
+    assert db.get_run(run_id)["followup_draft"] == edited
+    assert db.get_run(run_id)["followup_draft"] != original
+
+
+# --- export -----------------------------------------------------------------
+
+def build_export(db, run_id):
+    import app
+    return app.export_run(run_id)
+
+
+def test_export_contains_every_documented_section(db):
+    _, run_id, _ = run_scenario_with_draft(db, "ec2_incomplete")
+    ex = build_export(db, run_id)
+    assert set(ex) == {"run", "submission", "extracted", "findings",
+                       "communication", "events", "exported_at"}
+    assert ex["run"]["run_id"] == run_id
+    assert ex["run"]["status"] == "PENDING"
+    assert ex["submission"]["legal_entity_name"] == "Sundaram Industrial Supplies LLP"
+    assert ex["extracted"]["incorporation_certificate"] is None
+    assert sorted(f["rule_id"] for f in ex["findings"]) == ["R01", "R02", "R11"]
+    assert ex["events"] and all(e["detail_json"] is None for e in ex["events"])
+    assert any(e["event_type"] == "decision" for e in ex["events"])
+
+
+def test_export_distinguishes_drafted_from_sent(db):
+    _, run_id, _ = run_scenario_with_draft(db, "ec2_incomplete")
+    before = build_export(db, run_id)["communication"]
+    assert before["draft_exists"] is True
+    assert before["sent"] is False and before["sent_at"] is None
+
+    db.mark_followup_sent(run_id, before["draft"])
+    db.add_event(run_id, "communicate", "followup_sent", actor="user:priya",
+                 detail={"actor": "priya", "edited": False})
+    after = build_export(db, run_id)["communication"]
+    assert after["sent"] is True and after["sent_at"]
+    assert after["sent_by"] == "priya"
+
+
+def test_export_of_a_rejected_run_carries_the_internal_note_and_no_draft(db):
+    _, run_id, _ = run_scenario_with_draft(db, "ec3_bank_mismatch")
+    comm = build_export(db, run_id)["communication"]
+    assert comm["draft_exists"] is False and comm["draft"] is None
+    assert comm["sent"] is False
+    assert comm["internal_note"]["blocking_rules"] == ["R09"]
+
+
+def test_export_events_are_json_decoded(db):
+    _, run_id, _ = run_scenario_with_draft(db, "ec4_crossfield")
+    ex = build_export(db, run_id)
+    decision = next(e for e in ex["events"] if e["event_type"] == "decision")
+    assert decision["detail"]["status"] == "REJECTED"
+    assert decision["detail"]["rule_ids"] == ["R06", "R07", "R08"]
+
+
+def test_export_missing_run_raises_404(db):
+    import app
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        app.export_run("VS-9999")
+    assert exc.value.status_code == 404
+
+
+# --- drafting prompt guardrails ---------------------------------------------
+
+def test_draft_prompt_forbids_inventing_requirements():
+    import extract
+    p = extract.DRAFT_PROMPT
+    assert "do not add any requirement that is not on this list" in p
+    assert "Do not state or imply an approval decision" in p
+    assert "Do not mention internal rule identifiers" in p
+    assert "your submission is incomplete" in p          # the anti-example
+    assert set(extract.DRAFT_SCHEMA["properties"]) == {"subject", "body"}

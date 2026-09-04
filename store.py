@@ -138,8 +138,20 @@ def set_extracted(run_id: str, extracted: dict) -> None:
 
 
 def set_draft(run_id: str, draft: str) -> None:
+    """A draft is not a sent message. `followup_sent_at` stays NULL until a human
+    clicks send — that column is the entire human gate."""
     with _conn() as conn:
         conn.execute("UPDATE runs SET followup_draft = ? WHERE run_id = ?", (draft, run_id))
+
+
+def mark_followup_sent(run_id: str, body: str) -> str:
+    """Record that a human sent the follow-up. Returns the timestamp."""
+    ts = _now()
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE runs SET followup_draft = ?, followup_sent_at = ? WHERE run_id = ?",
+            (body, ts, run_id))
+    return ts
 
 
 # --- findings ---------------------------------------------------------------

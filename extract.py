@@ -72,6 +72,81 @@ PROMPTS = {
         + _TRANSCRIBER_RULES,
 }
 
+DRAFT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string"},
+        "body": {"type": "string"},
+    },
+    "required": ["subject", "body"],
+    "additionalProperties": False,
+}
+
+# The drafter never sees the submission, the status, or the BLOCK findings. It is
+# handed a vendor name, a contact name, and a list of things the vendor can fix.
+DRAFT_PROMPT = """You write short, plain follow-up emails to vendors on behalf of a \
+procurement team.
+
+Vendor: {vendor}
+Contact person: {contact}
+Reference: {run_id}
+
+These are the only outstanding items. Each one has already been checked; do not \
+re-interpret them and do not add any requirement that is not on this list:
+
+{items}
+
+Write the email. Requirements:
+- Address the contact by first name.
+- One numbered item per outstanding issue, in the order given.
+- Be specific. If an item names a date or a document, say the date and the \
+document name. Never write a vague summary like "your submission is incomplete".
+- End with one clear sentence on what happens next.
+- Keep it under 150 words, courteous and matter-of-fact.
+- Do not mention internal rule identifiers, scores, systems, or automated checks.
+- Do not state or imply an approval decision, and do not promise a timeline.
+
+`subject` must be one line and include the reference."""
+
+
+def draft_followup(run_id: str, vendor_name: str, contact_name: str,
+                   findings) -> tuple[str, dict]:
+    """Turn actionable findings into a vendor-facing draft. Returns (text, meta).
+
+    Runs after the decision and cannot influence it. Deterministic input,
+    natural-language output — the one place where that is pure upside.
+    """
+    items = "\n".join(
+        f"- {f['message']}" + (
+            f" (expected {f['expected']}, found {f['actual']})"
+            if f.get("expected") and f.get("actual") else "")
+        for f in findings)
+
+    resp = client().messages.create(
+        model=MODEL,
+        max_tokens=1000,
+        output_config={"effort": "low",
+                       "format": {"type": "json_schema", "schema": DRAFT_SCHEMA}},
+        messages=[{"role": "user", "content": DRAFT_PROMPT.format(
+            vendor=vendor_name, contact=contact_name or "there",
+            run_id=run_id, items=items)}],
+    )
+
+    raw = next(b.text for b in resp.content if b.type == "text")
+    data = json.loads(raw)
+    text = f"Subject: {data['subject']}\n\n{data['body']}"
+
+    meta = {
+        "purpose": "draft_followup",
+        "model": MODEL,
+        "input_summary": f"{len(findings)} actionable finding(s) for {vendor_name}",
+        "raw_response": raw,
+        "usage": {"input_tokens": resp.usage.input_tokens,
+                  "output_tokens": resp.usage.output_tokens},
+    }
+    return text, meta
+
+
 _client = None
 
 

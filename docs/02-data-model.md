@@ -148,6 +148,10 @@ CREATE TABLE events (            -- append-only. never UPDATE, never DELETE.
 );
 ```
 
+`followup_draft` holds the vendor-facing text and is NULL unless a draft was created.
+`followup_sent_at` is NULL until a human clicks send — **that column is the entire human gate**,
+and it is what makes "drafted" and "sent" distinguishable in the export.
+
 `submission_json` is the input snapshot and is never mutated. Extraction writes `extracted_json` once; stages 4–6 only read. That is what makes re-running a decision free, instant, and deterministic.
 
 ## Event detail payloads
@@ -158,7 +162,8 @@ CREATE TABLE events (            -- append-only. never UPDATE, never DELETE.
 | `stage_failed` | `{ "error": "...", "traceback_head": "..." }` |
 | `ai_call` | `{ "purpose", "model", "input_summary", "raw_response", "usage": {...} }` |
 | `decision` | `{ "status", "block_count", "fix_count", "rule_ids": [...] }` |
-| `followup_sent` | `{ "actor", "edited": bool }` |
+| `followup_sent` | `{ "actor", "edited": bool }` — actor also on the event's `actor` column as `user:<name>` |
+| `internal_note` | `{ "reason", "blocking_rules": [...], "note" }` — written for REJECTED instead of a draft |
 
 The `ai_call` event is what makes an AI-assisted decision auditable six months later: the exact model, the exact response, the token usage.
 

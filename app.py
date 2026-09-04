@@ -6,6 +6,7 @@ See docs/07-architecture.md.
 
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -129,6 +130,74 @@ def get_run(run_id: str):
         "findings": store.get_findings(run_id),
         "events": store.get_events(run_id),
     }
+
+
+@app.get("/run/{run_id}/export")
+def export_run(run_id: str):
+    """The whole run as one file — what replaces 'whatever's in someone's inbox'."""
+    run = store.get_run(run_id)
+    if run is None:
+        raise HTTPException(404, f"unknown run {run_id}")
+    findings = store.get_findings(run_id)
+    events = store.get_events(run_id)
+
+    return {
+        "run": {k: run[k] for k in ("run_id", "vendor_name", "created_at",
+                                    "status", "duration_ms")},
+        "submission": run["submission"],
+        "extracted": run["extracted"],
+        "findings": [{k: f[k] for k in ("rule_id", "severity", "stage", "message",
+                                        "expected", "actual", "tag")}
+                     for f in findings],
+        "communication": _communication(run, events),
+        "events": [{**e, "detail": json.loads(e["detail_json"])
+                    if e["detail_json"] else None,
+                    "detail_json": None} for e in events],
+        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def _communication(run: dict, events: list[dict]) -> dict:
+    note = next((json.loads(e["detail_json"]) for e in events
+                 if e["event_type"] == "internal_note"), None)
+    sent_event = next((e for e in events if e["event_type"] == "followup_sent"), None)
+    draft = run["followup_draft"]
+    return {
+        "draft_exists": draft is not None,
+        "draft": draft,
+        "sent": run["followup_sent_at"] is not None,
+        "sent_at": run["followup_sent_at"],
+        "sent_by": json.loads(sent_event["detail_json"])["actor"] if sent_event else None,
+        "internal_note": note,
+    }
+
+
+@app.post("/run/{run_id}/send")
+async def send_followup(run_id: str, request: Request):
+    """The human gate. Nothing leaves this system without someone clicking.
+
+    We do not send email — we record that a human did. See
+    docs/10-assumptions-and-scope.md (assumption A6).
+    """
+    run = store.get_run(run_id)
+    if run is None:
+        raise HTTPException(404, f"unknown run {run_id}")
+    if run["followup_draft"] is None:
+        raise HTTPException(400, "this run has no follow-up draft to send")
+    if run["followup_sent_at"] is not None:
+        raise HTTPException(409, f"already sent at {run['followup_sent_at']}")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    actor = (payload.get("actor") or "reviewer").strip()
+    body = payload.get("body") or run["followup_draft"]
+
+    sent_at = store.mark_followup_sent(run_id, body)
+    store.add_event(run_id, "communicate", "followup_sent", actor=f"user:{actor}",
+                    detail={"actor": actor, "edited": body != run["followup_draft"]})
+    return {"run_id": run_id, "sent": True, "sent_at": sent_at, "sent_by": actor}
 
 
 @app.post("/reset")

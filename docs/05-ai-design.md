@@ -108,11 +108,29 @@ demo-stability property, asserted by a test. EC-3's fraud case sits at 0.348.
 
 **Why AI:** deterministic input, natural-language output. Pure upside, zero risk surface — it runs *after* the decision and cannot influence it.
 
-**Implementation:** the prompt receives only the vendor name and the **FIX findings** (rule id, message, expected, actual). It is instructed to be specific and dated — *"your Certificate of Insurance expired on 21 July 2026"*, not *"your submission is incomplete"* — and told not to invent requirements beyond the findings given.
+**Implementation:** the prompt receives the vendor name, the contact's name, the run reference,
+and the **actionable FIX findings** (message, expected, actual only — not rule ids, not
+severities, never the submission). Output is structured as `{subject, body}` and stored as
+`Subject: ...
+
+<body>`.
+
+**"Actionable" excludes `ai_uncertain`.** Those findings exist because *we* were unsure and routed
+the case to a human reviewer — asking the vendor to resolve our uncertainty, and exposing model
+confidence to them, is the wrong message. A PENDING run whose only FIX findings are uncertain
+gets no draft at all. It is instructed to be specific and dated — *"your Certificate of Insurance expired on 21 July 2026"*, not *"your submission is incomplete"* — and told not to invent requirements beyond the findings given.
 
 **Runs only for `PENDING`.** A `REJECTED` run produces an internal note instead. Telling a suspected fraudster exactly which check caught them is a real-world anti-pattern; that asymmetry is deliberate and worth saying out loud in the demo.
 
-**Human-gated.** The draft is displayed, editable, and requires a click. Nothing auto-sends. The click writes a `followup_sent` event with the actor. This is also why we never build SMTP — "Copy to clipboard" is the send button. See `10-assumptions-and-scope.md`.
+**Human-gated.** The draft is displayed, editable, and requires a click. Nothing auto-sends. The
+gate is a column: `followup_sent_at` stays NULL until `POST /run/{id}/send`, which writes it along
+with a `followup_sent` event carrying the actor and whether the text was edited. Sending twice
+returns 409; sending a run with no draft returns 400.
+
+**Stage 7 is never fatal.** The decision is persisted *before* communication runs. If drafting
+fails, a `stage_failed` event is written and the status stands — losing a convenience email must
+not discard a correct, durable decision. This is safe precisely because communication is
+downstream of the decision and cannot influence it. This is also why we never build SMTP — "Copy to clipboard" is the send button. See `10-assumptions-and-scope.md`.
 
 ## What AI must NEVER do
 

@@ -84,8 +84,67 @@ def _extraction_stage(run_id: str, pause: float, extract_fn) -> dict | None:
     return extracted
 
 
+def _actionable(findings) -> list[dict]:
+    """FIX findings a vendor can actually do something about.
+
+    `ai_uncertain` findings are excluded on purpose: the comparator was unsure and
+    routed the case to a *human reviewer*, not to the vendor. Asking a vendor to
+    resolve our own uncertainty — and exposing model confidence to them — is the
+    wrong message. A run whose only FIX findings are uncertain gets no draft.
+    """
+    return [{"message": f.message, "expected": f.expected, "actual": f.actual}
+            for f in findings
+            if f.severity == rules.FIX and f.tag != "ai_uncertain"]
+
+
+def _communicate_stage(run_id: str, status: str, findings, submission: dict,
+                       pause: float, draft_fn) -> None:
+    """Stage 7. Drafts for PENDING only; REJECTED gets an internal note instead.
+
+    Never fatal. The decision is already made and persisted by the time this runs
+    — losing a convenience email must not discard a correct, durable decision.
+    """
+    store.add_event(run_id, "communicate", "stage_started")
+    t0 = time.perf_counter()
+    if pause:
+        time.sleep(pause)
+
+    try:
+        if status == "REJECTED":
+            # No vendor-facing message. Telling a suspected fraudster which check
+            # caught them is a real-world anti-pattern (docs/05-ai-design.md).
+            blocks = [f for f in findings if f.severity == rules.BLOCK]
+            store.add_event(run_id, "communicate", "internal_note", detail={
+                "reason": "rejected — no vendor-facing message drafted",
+                "blocking_rules": sorted({f.rule_id for f in blocks}),
+                "note": "; ".join(f.message for f in blocks),
+            })
+            outcome = "internal_note"
+
+        elif status == "PENDING" and (items := _actionable(findings)):
+            text, meta = draft_fn(run_id,
+                                  submission.get("legal_entity_name") or "",
+                                  submission.get("contact_name") or "",
+                                  items)
+            store.set_draft(run_id, text)
+            store.add_event(run_id, "communicate", "ai_call", detail=meta)
+            outcome = "draft_created"
+
+        else:
+            outcome = "no_communication_needed"
+
+        store.add_event(run_id, "communicate", "stage_completed",
+                        detail={"outcome": outcome},
+                        duration_ms=int((time.perf_counter() - t0) * 1000))
+    except Exception as exc:
+        store.add_event(run_id, "communicate", "stage_failed", detail={
+            "error": f"{type(exc).__name__}: {exc}",
+            "note": "decision already persisted; only the draft was lost",
+        })
+
+
 def run(run_id: str, *, today: date | None = None, names_match=None,
-        extract_fn=None, pause: float = STAGE_PAUSE_S) -> str:
+        extract_fn=None, draft_fn=None, pause: float = STAGE_PAUSE_S) -> str:
     """Execute the pipeline for one run. Returns the final status."""
     t0 = time.perf_counter()
     run_row = store.get_run(run_id)
@@ -149,6 +208,13 @@ def run(run_id: str, *, today: date | None = None, names_match=None,
             "fix_count": sum(f.severity == rules.FIX for f in findings),
             "rule_ids": sorted({f.rule_id for f in findings}),
         })
+        # Persist the decision before stage 7 runs. Communication is downstream of
+        # the decision and must never be able to change or delay it.
+        store.set_status(run_id, status)
+
+        current = "communicate"
+        _communicate_stage(run_id, status, findings, submission, pause,
+                           draft_fn or extract.draft_followup)
     except Exception as exc:
         # ERROR is not REJECTED. "Our pipeline crashed" and "this vendor is not
         # credible" are different facts (docs/04-decision-engine.md).
