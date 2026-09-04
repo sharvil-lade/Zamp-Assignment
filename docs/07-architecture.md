@@ -27,9 +27,11 @@ vendor-onboarding/
 ├── templates/
 │   ├── base.html
 │   ├── submit.html
-│   ├── run.html          live run view + detail + audit + email draft
-│   ├── dashboard.html
-│   └── _stages.html      HTMX polling fragment
+│   ├── run.html          page shell: header + #run-body
+│   ├── _run_body.html    the polled fragment — stages, findings, comparison,
+│   │                     timeline, draft box. Swapped whole, so polling stops
+│   │                     by simply not re-rendering the hx-trigger.
+│   └── dashboard.html
 ├── samples/
 │   ├── make_pdfs.py     regenerates pdfs/ (reportlab)
 │   ├── make_fixtures.py regenerates the 4 scenario JSONs (computes the GSTIN)
@@ -86,13 +88,15 @@ POST /submit  (multipart: `submission` JSON field + 3 optional file fields,
               |                       + add_event(decision, rule_ids)
               +- [7] communicate   -> draft email if PENDING -> store.set_draft()
 
-GET  /                    submit form
-POST /submit              create run, redirect to /run/{id}
+GET  /                    submit form (14 fields, 3 uploads, sample dropdown)
+GET  /samples/{name}      one scenario fixture as JSON (fills the form)
+POST /submit              multipart -> background run + 303 to /run/{id}
+                          application/json -> synchronous, returns the result
 GET  /run/{id}            full run page
-GET  /run/{id}/stages     HTMX fragment, polled every 700 ms   <- live run view
+GET  /run/{id}/stages     the polled fragment, every 700 ms  <- live run view
 GET  /run/{id}/export     the whole run as JSON
-POST /run/{id}/send       writes followup_sent event (human gate)
-GET  /dashboard           history across runs
+POST /run/{id}/send       human gate; form post redirects, JSON post returns JSON
+GET  /dashboard?status=   history across runs, optionally filtered
 POST /reset               wipe runs/findings/events + uploads
 ```
 
@@ -104,13 +108,19 @@ The pipeline runs in `BackgroundTasks`, writing an event row per completed stage
 <div hx-get="/run/{{ run_id }}/stages" hx-trigger="every 700ms" hx-swap="innerHTML">
 ```
 
-When the run reaches a terminal status the fragment stops emitting the polling attribute and HTMX stops on its own. No SSE, no WebSocket, no reconnect logic, no streaming code.
+When the run finishes the fragment stops emitting the polling attribute and HTMX stops on its
+own. No SSE, no WebSocket, no reconnect logic, no streaming code.
+
+**Poll on `run_finished`, not on the status.** The status is persisted *before* stage 7 so the
+decision is durable the instant it is made — which means a terminal status does not mean the
+pipeline has finished. Polling on the status stops the live view while the follow-up is still
+being drafted, and the draft never appears without a manual refresh. The pipeline writes a
+`run_finished` event as its last act; the view polls until that exists.
 
 **A deliberate ~400 ms pause per stage.** A run that completes in 80 ms looks broken on video — stages flash from empty to done with nothing visible in between. The pause is a demo requirement, not padding, and it is marked in code:
 
-```python
-# ponytail: 400ms/stage so the run view is legible on camera. Drop for production.
-```
+`pipeline.DEMO_PAUSE_S = 0.4`, passed explicitly by the UI route. The module default stays
+`0.0` so the test suite is not slowed — the pause is a demo-legibility device, not behaviour.
 
 ## Concurrency and state
 

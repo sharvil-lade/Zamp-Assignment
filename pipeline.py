@@ -16,9 +16,24 @@ import matching
 import rules
 import store
 
-# ponytail: 0 for now. Part 6 raises this to 0.4 so the live run view is
-# legible on camera; a run that finishes in 80 ms looks broken on video.
+# Default 0 so the test suite is not slowed. The UI passes DEMO_PAUSE_S so the
+# live run view is legible on camera — a run that finishes in 80 ms looks broken
+# on video, stages flashing from empty to done with nothing visible between.
 STAGE_PAUSE_S = 0.0
+DEMO_PAUSE_S = 0.4
+
+# The canonical stage list. `ai` is True where a model is always used, False
+# where one never is, and None for consistency — which calls a model only when a
+# name comparison lands in the ambiguous band, so the UI badges it per run.
+STAGES = (
+    ("intake", "Intake", False),
+    ("completeness", "Completeness", False),
+    ("extraction", "Extraction", True),
+    ("format", "Format & checksum", False),
+    ("consistency", "Consistency", None),
+    ("decision", "Decision", False),
+    ("communicate", "Communicate", True),
+)
 
 
 def _run_stage(run_id: str, stage: str, pause: float, work) -> list[rules.Finding]:
@@ -222,8 +237,18 @@ def run(run_id: str, *, today: date | None = None, names_match=None,
             "error": f"{type(exc).__name__}: {exc}",
             "traceback_head": traceback.format_exc().splitlines()[-1],
         })
-        store.set_status(run_id, "ERROR", int((time.perf_counter() - t0) * 1000))
+        elapsed = int((time.perf_counter() - t0) * 1000)
+        store.set_status(run_id, "ERROR", elapsed)
+        store.add_event(run_id, "run", "run_finished",
+                        detail={"status": "ERROR"}, duration_ms=elapsed)
         return "ERROR"
 
-    store.set_status(run_id, status, int((time.perf_counter() - t0) * 1000))
+    elapsed = int((time.perf_counter() - t0) * 1000)
+    store.set_status(run_id, status, elapsed)
+    # The terminal marker. The status is set before stage 7 so the decision is
+    # durable the moment it is made, which means "status is terminal" is NOT the
+    # same as "the pipeline has finished" — the live view polls on this event
+    # instead, or it stops watching while the follow-up is still being drafted.
+    store.add_event(run_id, "run", "run_finished",
+                    detail={"status": status}, duration_ms=elapsed)
     return status

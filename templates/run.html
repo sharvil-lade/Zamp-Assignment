@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ run.run_id }} · Vendor Onboarding{% endblock %}
+
+{% block content %}
+<div class="flex items-baseline justify-between gap-4">
+  <div>
+    <h1 class="text-xl font-semibold tracking-tight">
+      {{ run.vendor_name or "Unnamed vendor" }}
+    </h1>
+    <p class="mt-1 text-sm text-slate-500">
+      <span class="mono">{{ run.run_id }}</span> · submitted {{ run.created_at }}
+    </p>
+  </div>
+  <a href="/run/{{ run.run_id }}/export" target="_blank"
+     class="shrink-0 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium
+            text-slate-600 hover:bg-slate-100">Export JSON</a>
+</div>
+
+<div id="run-body" class="mt-8">
+  {% include "_run_body.html" %}
+</div>
+{% endblock %}

@@ -8,7 +8,10 @@ The brief states the UI is part of the grade and names two things explicitly: **
 
 - The 14 fields, grouped: Entity · Contact · Tax · Banking
 - Three file inputs: Certificate of Incorporation · Cancelled cheque or bank letter · Certificate of Insurance
-- **"Load sample" dropdown** — the four scenarios, pre-filled including attachments
+- **"Load sample" dropdown** — the four scenarios. It fills the 14 fields from
+  `/samples/{name}` and names the fixture PDFs in a hidden `sample` field; a browser cannot
+  pre-fill a file input, so the server attaches those documents itself. Two clicks, no typing,
+  no fumbling an upload on camera.
 
 The dropdown is the most important control on this screen. In the interview you pick a scenario and hit Run: no typing, no typos, no dead air, no chance of fat-fingering a GSTIN on camera.
 
@@ -30,7 +33,10 @@ Submitting redirects straight to the live run view.
 [ ] 7  Communicate           [AI]
 ```
 
-Stages carrying an `[AI]` badge are visibly marked. That badge is the fastest way to communicate the architecture without saying a word.
+Stages carrying an `AI` badge are visibly marked. That badge is the fastest way to communicate
+the architecture without saying a word. Extraction and Communicate always carry it; **Consistency
+carries it only when that run actually escalated a name comparison** — so on all four demo
+scenarios it stays off, which is itself the point ("the fraud case didn't need the model").
 
 **Finding cards** appear under their stage as they fire, severity-coloured (BLOCK red, FIX amber), each showing **both sides of the contradiction**:
 
@@ -49,7 +55,11 @@ Showing both values is what turns a verdict into an explanation. A card that say
 
 **Below the fold, four sections:**
 
-1. **Extracted vs. form** — a two-column table per document, form value beside extracted value, mismatched rows highlighted. This is where the AI's output is made inspectable rather than trusted.
+1. **Extracted vs. form** — one table per document: form value, document value, and **the rule
+   that compares them**. A highlighted row therefore reads as "this is why R09 fired", not just
+   "these differ". The rows mirror the rules rather than the fields, which is what makes EC-3
+   legible: its form and cheque agree with each other, so the pair worth showing is
+   *legal entity name* against *account holder on the document*.
 2. **Audit timeline** — every event with timestamp, stage, actor, duration. AI events expand to show model, response, and token usage.
 3. **Follow-up draft** (PENDING only) — editable textarea, **Copy** button, **Mark as sent** button. This is the human gate; nothing auto-sends.
 4. **Export JSON** — the entire run as one file.

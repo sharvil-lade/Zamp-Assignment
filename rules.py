@@ -133,6 +133,20 @@ DOCUMENT_LABELS = {
     "insurance_certificate": "Certificate of Insurance",
 }
 
+# The 14 documented submission fields, in form order (docs/02-data-model.md).
+SUBMISSION_FIELDS = (
+    "legal_entity_name", "entity_type", "country_of_incorporation",
+    "registered_address_state",
+    "contact_name", "contact_email", "contact_phone",
+    "tax_id_type", "gstin", "pan",
+    "account_holder_name", "account_number", "ifsc", "bank_name",
+)
+
+ENTITY_TYPES = ("Private Limited", "LLP", "Partnership", "Proprietorship",
+                "Foreign Corporation")
+COUNTRIES = ("IN", "US")
+TAX_ID_TYPES = ("GSTIN", "EIN")
+
 ALWAYS_REQUIRED = (
     "legal_entity_name", "entity_type", "country_of_incorporation",
     "registered_address_state", "contact_name", "contact_email",
