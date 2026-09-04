@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Vendor Onboarding Decision Engine{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased">
+
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+      <a href="/dashboard" class="flex items-baseline gap-3">
+        <span class="text-base font-semibold tracking-tight">Vendor Onboarding</span>
+        <span class="text-xs uppercase tracking-widest text-slate-400">Decision Engine</span>
+      </a>
+      <form method="post" action="/reset"
+            onsubmit="return confirm('Delete all runs, findings, events and uploads?')">
+        <button class="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium
+                       text-slate-600 hover:bg-slate-100">Reset</button>
+      </form>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-5xl px-6 py-10">
+    {% block content %}{% endblock %}
+  </main>
+
+</body>
+</html>

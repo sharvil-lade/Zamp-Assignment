@@ -110,7 +110,9 @@ CREATE TABLE runs (
 );
 
 CREATE TABLE findings (
-  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  id       INTEGER PRIMARY KEY,          -- no AUTOINCREMENT: it would create
+                                         -- a 4th internal table (sqlite_sequence)
+                                         -- and we never need never-reused ids
   run_id   TEXT NOT NULL REFERENCES runs(run_id),
   rule_id  TEXT NOT NULL,
   severity TEXT NOT NULL,
@@ -122,7 +124,7 @@ CREATE TABLE findings (
 );
 
 CREATE TABLE events (            -- append-only. never UPDATE, never DELETE.
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          INTEGER PRIMARY KEY,
   run_id      TEXT NOT NULL REFERENCES runs(run_id),
   ts          TEXT NOT NULL,
   stage       TEXT NOT NULL,
