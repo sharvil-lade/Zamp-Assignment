@@ -142,6 +142,26 @@ SUBMISSION_FIELDS = (
     "account_holder_name", "account_number", "ifsc", "bank_name",
 )
 
+# Human labels for the same fields. Rule messages keep the raw field name — that
+# is the right level of detail for a reviewer — and the vendor-facing draft
+# substitutes the label instead (pipeline._vendor_message).
+FIELD_LABELS = {
+    "legal_entity_name": "legal entity name",
+    "entity_type": "entity type",
+    "country_of_incorporation": "country of incorporation",
+    "registered_address_state": "registered address state",
+    "contact_name": "contact name",
+    "contact_email": "contact email address",
+    "contact_phone": "contact phone number",
+    "tax_id_type": "tax ID type",
+    "gstin": "GSTIN",
+    "pan": "PAN",
+    "account_holder_name": "bank account holder name",
+    "account_number": "bank account number",
+    "ifsc": "IFSC code",
+    "bank_name": "bank name",
+}
+
 ENTITY_TYPES = ("Private Limited", "LLP", "Partnership", "Proprietorship",
                 "Foreign Corporation")
 COUNTRIES = ("IN", "US")

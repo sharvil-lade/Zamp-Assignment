@@ -4,7 +4,7 @@ The brief states the UI is part of the grade and names two things explicitly: **
 
 ## Screen 1 · Submit
 
-**Route:** `GET /` then `POST /submit`
+**Route:** `GET /` then `POST /submit` (multipart → background run → `303` to the run view)
 
 - The 14 fields, grouped: Entity · Contact · Tax · Banking
 - Three file inputs: Certificate of Incorporation · Cancelled cheque or bank letter · Certificate of Insurance
@@ -19,19 +19,36 @@ Submitting redirects straight to the live run view.
 
 ## Screen 2 · Live run — *the graded screen*
 
-**Route:** `GET /run/{id}`, fragment at `GET /run/{id}/stages` polled every 700 ms.
+**Route:** `GET /run/{id}`; the polled fragment is `GET /run/{id}/stages`, swapped into
+`#run-body` every 700 ms.
+
+The fragment is the **whole run body**, not just the stage list — one swap updates stages,
+findings, communication, comparison and timeline together, so nothing needs a page reload when
+the run completes. Polling stops because the finished fragment simply does not re-render the
+`hx-trigger` attribute.
+
+**It polls on the `run_finished` event, not on the status.** The status is persisted *before*
+stage 7 so the decision is durable the instant it is made — which means a terminal status does
+not mean the pipeline has finished. Polling on status stops the view while the follow-up is
+still being drafted, and the draft never appears.
 
 **Above the fold — the seven stages**, vertically, each in one of three states:
 
+As implemented, with real timings from an EC-2 run:
+
 ```
-[x] 1  Intake                                     12 ms
-[x] 2  Completeness                                3 ms    0 findings
-[x] 3  Extraction            [AI]              1 840 ms    3 documents read
-[x] 4  Format & checksum                           2 ms    0 findings
-[~] 5  Consistency                                         <- spinner, active
-[ ] 6  Decision
-[ ] 7  Communicate           [AI]
+[x] 1  Intake                                      400 ms
+[x] 2  Completeness          2 finding(s)          406 ms
+[x] 3  Extraction        AI  2 document(s)        7 784 ms
+[x] 4  Format & checksum                           400 ms
+[x] 5  Consistency           1 finding(s)          412 ms
+[x] 6  Decision              PENDING
+[x] 7  Communicate       AI  draft created       4 714 ms
 ```
+
+A stage that never ran because the submission carried no documents renders as
+`skipped` ("no documents"), not as pending — extraction is the only stage that
+can legitimately be skipped.
 
 Stages carrying an `AI` badge are visibly marked. That badge is the fastest way to communicate
 the architecture without saying a word. Extraction and Communicate always carry it; **Consistency
@@ -61,8 +78,15 @@ Showing both values is what turns a verdict into an explanation. A card that say
    legible: its form and cheque agree with each other, so the pair worth showing is
    *legal entity name* against *account holder on the document*.
 2. **Audit timeline** — every event with timestamp, stage, actor, duration. AI events expand to show model, response, and token usage.
-3. **Follow-up draft** (PENDING only) — editable textarea, **Copy** button, **Mark as sent** button. This is the human gate; nothing auto-sends.
-4. **Export JSON** — the entire run as one file.
+3. **Follow-up draft** (PENDING only) — editable textarea, **Copy** button, an actor
+   field and **Mark as sent**. The badge reads *Drafted — not sent* in amber, then
+   *Sent &lt;timestamp&gt;* in green, after which the textarea is read-only and the send
+   button is gone. This is the human gate; nothing auto-sends. A REJECTED run shows
+   an **Internal note** here instead, naming the blocking rules.
+4. **Rejected attachments** — if a file was refused at upload (wrong type, empty,
+   corrupt, oversized) an amber panel names the file and the reason. The document
+   counts as not attached, so R02 reports it and the run is Pending, not Errored.
+5. **Export JSON** — `/run/{id}/export`, the entire run as one file.
 
 Spend disproportionate build time here. Everything before Part 6 was plumbing; this screen is what gets pointed at.
 
@@ -72,7 +96,8 @@ Spend disproportionate build time here. Everything before Part 6 was plumbing; t
 
 - Four stat tiles: Total · Approved · Pending · Rejected
 - Table: `Run ID · Vendor · Status · Findings · Submitted · Duration`, newest first
-- Status filter (All / Approved / Pending / Rejected / Error)
+- Status filter pills (All / Approved / Pending / Rejected / Error) via `?status=`;
+  an unrecognised value falls back to All rather than erroring
 - `ERROR` runs styled distinctly from `REJECTED` — different failure, different colour
 - Row click opens the run detail
 

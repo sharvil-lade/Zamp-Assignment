@@ -87,6 +87,7 @@ def submit_form(request: Request):
         "countries": rules.COUNTRIES,
         "tax_id_types": rules.TAX_ID_TYPES,
         "fields": rules.SUBMISSION_FIELDS,
+        "labels": rules.FIELD_LABELS,
     })
 
 

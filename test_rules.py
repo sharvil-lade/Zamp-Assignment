@@ -1024,7 +1024,8 @@ def test_ec2_pending_produces_an_itemised_draft(db):
     # every actionable finding is itemised, including the date
     assert "21 July 2026" in draft
     assert "Certificate of Incorporation" in draft
-    assert "contact_phone" in draft
+    assert "contact phone number" in draft      # human label, not the field name
+    assert "contact_phone" not in draft
     assert len(drafts) == 1 and len(drafts[0]["findings"]) == 3
 
 
@@ -1054,6 +1055,43 @@ def test_approved_run_has_no_communication_output(db):
                 for e in db.get_events(run_id)
                 if e["event_type"] == "stage_completed" and e["stage"] == "communicate"]
     assert outcomes == ["no_communication_needed"]
+
+
+def test_vendor_wording_replaces_raw_field_names():
+    """A vendor has never seen our field names; a reviewer needs them."""
+    import pipeline
+    f = Finding("R01", FIX, "completeness",
+                "Required field 'contact_phone' is missing")
+    assert pipeline._vendor_message(f) == (
+        "The contact phone number was left blank on the form.")
+    assert "contact_phone" not in pipeline._vendor_message(f)
+
+
+def test_reviewer_wording_is_unchanged():
+    found = rules.r01_required_fields(base_submission(contact_phone=""), None, CTX)
+    assert found[0].message == "Required field 'contact_phone' is missing"
+
+
+def test_non_r01_messages_are_passed_through_untouched():
+    import pipeline
+    for f in (Finding("R02", FIX, "completeness",
+                      "Required document 'Certificate of Insurance' was not attached"),
+              Finding("R11", FIX, "consistency",
+                      "Certificate of Insurance expired on 21 July 2026")):
+        assert pipeline._vendor_message(f) == f.message
+
+
+def test_every_submission_field_has_a_human_label():
+    assert set(rules.FIELD_LABELS) == set(rules.SUBMISSION_FIELDS)
+    assert all("_" not in label for label in rules.FIELD_LABELS.values())
+
+
+def test_draft_input_carries_no_raw_field_names(db):
+    drafts = []
+    run_scenario_with_draft(db, "ec2_incomplete", drafts)
+    for item in drafts[0]["findings"]:
+        for field in rules.SUBMISSION_FIELDS:
+            assert field not in item["message"], field
 
 
 def test_drafter_never_receives_the_raw_submission(db):

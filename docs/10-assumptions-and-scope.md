@@ -16,6 +16,8 @@ The case study says: *"treat ambiguity as part of the exercise. Make an assumpti
 | A8 | Documents are **single-page, English, digital or clean scans** | Multi-page and multi-language extraction is a real problem; it is not this problem. |
 | A9 | A **~400 ms per-stage pause** is intentional | Demo legibility. Marked in code as removable. |
 | A10 | Thresholds 0.92 / 0.75 / 0.70 are **tuned once against the sample set** | Four numbers nobody will change do not need a config system. |
+| A12 | A **refused attachment counts as "not attached"** | The brief names "vendors attach the wrong documents" as a normal case, so it must be a fixable finding (R02), not a failed run. |
+| A13 | **Reviewer identity is a free-text field** | Follows from A4. Real auth is the first thing production adds — see `13-deployment-plan.md`. |
 | A11 | The **PDF is the source of truth over the form** where they disagree | A document is harder to fabricate casually than a text input. This is why R09/R10/R12 compare extracted values against typed ones and not the reverse. |
 
 ## MVP scope — what ships
@@ -96,6 +98,22 @@ Before hardening, every bad upload produced `ERROR`.
 response, which is the point of an auditable AI-assisted decision. Nothing is written to stdout or
 the server log: verified that account numbers and key-shaped strings appear zero times in
 `server.log` across a full demo run.
+
+## Production considerations
+
+What is deliberately absent here but mandatory before this handled real vendors, in the order it
+would be closed. Detail and the migration seam: `13-deployment-plan.md`.
+
+| # | Gap | Why it is out of scope now |
+|---|---|---|
+| P1 | **Authentication and RBAC** | Single reviewer on one machine (A4). `/reset` is unauthenticated and destructive — it exists for demo repeatability. |
+| P2 | **Encryption at rest for `ai_call` payloads** | They hold account numbers by design; that *is* the auditable record. Today it is a plain column. |
+| P3 | **Durable storage and a real database** | SQLite and a local `uploads/` directory do not survive serverless. One module (`store.py`) plus a file adapter. |
+| P4 | **A real job runner** | `BackgroundTasks` does not outlive a serverless response. The live run view needs no change — it reads persisted events. |
+| P5 | **Concurrency safety** | `_next_run_id` reads `MAX(run_id)`; correct for one process, racy under load. A sequence fixes it. |
+| P6 | **Rate limiting, CSRF, retention policy** | Standard middleware and policy; no design work outstanding. |
+| P7 | **Observability** | Structured logs, error tracking, per-stage latency and token spend. |
+| P8 | **Resubmission linking** | A `parent_run_id` column so a corrected submission points at the run it replaces. |
 
 ## Known limitations — state these before being asked
 

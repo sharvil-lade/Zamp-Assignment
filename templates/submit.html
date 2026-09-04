@@ -1,14 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Submit · Vendor Onboarding{% endblock %}
 
-{% set labels = {
-  'legal_entity_name': 'Legal entity name', 'entity_type': 'Entity type',
-  'country_of_incorporation': 'Country of incorporation',
-  'registered_address_state': 'Registered address — state',
-  'contact_name': 'Contact name', 'contact_email': 'Contact email',
-  'contact_phone': 'Contact phone', 'tax_id_type': 'Tax ID type',
-  'gstin': 'GSTIN', 'pan': 'PAN', 'account_holder_name': 'Account holder name',
-  'account_number': 'Account number', 'ifsc': 'IFSC', 'bank_name': 'Bank name' } %}
+{# field labels come from rules.FIELD_LABELS — one source of truth #}
 {% set groups = [
   ('Entity', ['legal_entity_name', 'entity_type', 'country_of_incorporation',
               'registered_address_state']),
@@ -49,7 +42,7 @@
     <div class="mt-4 grid gap-4 sm:grid-cols-2">
       {% for name in names %}
       <div>
-        <label for="{{ name }}" class="block text-sm text-slate-600">{{ labels[name] }}</label>
+        <label for="{{ name }}" class="block text-sm text-slate-600">{{ labels[name] | title }}</label>
         {% if name in selects %}
         <select id="{{ name }}" name="{{ name }}"
                 class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm">

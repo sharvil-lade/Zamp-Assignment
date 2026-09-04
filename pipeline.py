@@ -117,9 +117,23 @@ def _actionable(findings) -> list[dict]:
     resolve our own uncertainty — and exposing model confidence to them — is the
     wrong message. A run whose only FIX findings are uncertain gets no draft.
     """
-    return [{"message": f.message, "expected": f.expected, "actual": f.actual}
+    return [{"message": _vendor_message(f), "expected": f.expected,
+             "actual": f.actual}
             for f in findings
             if f.severity == rules.FIX and f.tag != "ai_uncertain"]
+
+
+def _vendor_message(finding) -> str:
+    """Reviewer wording out, vendor wording in.
+
+    R01 names the raw form field — right for a reviewer reading the run page,
+    wrong in an email to a vendor who has never seen our field names.
+    """
+    if finding.rule_id == "R01" and "'" in finding.message:
+        field = finding.message.split("'")[1]
+        label = rules.FIELD_LABELS.get(field, field.replace("_", " "))
+        return f"The {label} was left blank on the form."
+    return finding.message
 
 
 def _communicate_stage(run_id: str, status: str, findings, submission: dict,
