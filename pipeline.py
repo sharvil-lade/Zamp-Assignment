@@ -7,6 +7,7 @@ Implemented so far: 1 intake · 2 completeness · 4 format · 5 consistency · 6
 Stage 3 (extraction) arrives in Part 3; stage 7 (communicate) in Part 5.
 """
 
+import re
 import time
 import traceback
 from datetime import date
@@ -34,6 +35,15 @@ STAGES = (
     ("decision", "Decision", False),
     ("communicate", "Communicate", True),
 )
+
+
+# Defence in depth: provider errors are echoed into the audit trail, so scrub
+# anything key-shaped before it is persisted or rendered.
+_SECRET_RE = re.compile(r"sk-[A-Za-z0-9_\-]{8,}")
+
+
+def _safe_error(exc: Exception) -> str:
+    return _SECRET_RE.sub("sk-***REDACTED***", f"{type(exc).__name__}: {exc}")[:500]
 
 
 def _run_stage(run_id: str, stage: str, pause: float, work) -> list[rules.Finding]:
@@ -153,7 +163,7 @@ def _communicate_stage(run_id: str, status: str, findings, submission: dict,
                         duration_ms=int((time.perf_counter() - t0) * 1000))
     except Exception as exc:
         store.add_event(run_id, "communicate", "stage_failed", detail={
-            "error": f"{type(exc).__name__}: {exc}",
+            "error": _safe_error(exc),
             "note": "decision already persisted; only the draft was lost",
         })
 
@@ -234,8 +244,9 @@ def run(run_id: str, *, today: date | None = None, names_match=None,
         # ERROR is not REJECTED. "Our pipeline crashed" and "this vendor is not
         # credible" are different facts (docs/04-decision-engine.md).
         store.add_event(run_id, current, "stage_failed", detail={
-            "error": f"{type(exc).__name__}: {exc}",
-            "traceback_head": traceback.format_exc().splitlines()[-1],
+            "error": _safe_error(exc),
+            "traceback_head": _SECRET_RE.sub(
+                "sk-***REDACTED***", traceback.format_exc().splitlines()[-1])[:300],
         })
         elapsed = int((time.perf_counter() - t0) * 1000)
         store.set_status(run_id, "ERROR", elapsed)

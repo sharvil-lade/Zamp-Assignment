@@ -5,6 +5,7 @@ No business logic lives here — see docs/07-architecture.md.
 """
 
 import json
+import re
 import shutil
 import sqlite3
 from contextlib import contextmanager
@@ -15,6 +16,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent
 DB_PATH = BASE_DIR / "vendor.db"
 UPLOAD_DIR = BASE_DIR / "uploads"
+
+RUN_ID_RE = re.compile(r"^VS-\d{4,}$")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -229,6 +232,9 @@ def upload_dir(run_id: str) -> Path:
     so R02 can report all three as missing. A JSON-only submit never creates it,
     and extraction is skipped entirely.
     """
+    if not RUN_ID_RE.match(run_id):
+        # Never let a caller-supplied id become a filesystem path.
+        raise ValueError(f"invalid run id: {run_id!r}")
     return UPLOAD_DIR / run_id
 
 

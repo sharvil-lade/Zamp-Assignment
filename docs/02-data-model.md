@@ -164,6 +164,7 @@ and it is what makes "drafted" and "sent" distinguishable in the export.
 | `decision` | `{ "status", "block_count", "fix_count", "rule_ids": [...] }` |
 | `followup_sent` | `{ "actor", "edited": bool }` — actor also on the event's `actor` column as `user:<name>` |
 | `internal_note` | `{ "reason", "blocking_rules": [...], "note" }` — written for REJECTED instead of a draft |
+| `upload_rejected` | `{ "document", "filename", "reason", "bytes" }` — stage `intake`. The file was refused at the boundary and never saved, so R02 reports the document as missing. A wrong attachment is a fixable finding, never a crashed run. |
 | `run_finished` | `{ "status" }` — the terminal marker, stage `run`. The status is persisted *before* stage 7, so "status is terminal" is not the same as "the pipeline has finished"; the live run view polls until this event exists. |
 
 The `ai_call` event is what makes an AI-assisted decision auditable six months later: the exact model, the exact response, the token usage.

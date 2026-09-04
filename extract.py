@@ -27,6 +27,37 @@ MEDIA_TYPES = {
 }
 
 
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+# First bytes each accepted format must start with. A renamed .exe or a truncated
+# download is caught here rather than at the API, which turns "vendor attached the
+# wrong file" into a fixable finding instead of a crashed run.
+MAGIC = {
+    "application/pdf": (b"%PDF",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/jpeg": (b"\xff\xd8\xff",),
+}
+
+
+def check_upload(filename: str, data: bytes) -> str | None:
+    """Return a human-readable rejection reason, or None if the file is usable."""
+    suffix = Path(filename).suffix.lower()
+    if suffix not in MEDIA_TYPES:
+        allowed = ", ".join(sorted(MEDIA_TYPES))
+        return f"'{suffix or filename}' is not a supported file type (allowed: {allowed})"
+    if not data:
+        return "the file is empty"
+    if len(data) > MAX_UPLOAD_BYTES:
+        # The caller reads MAX+1 bytes, so len(data) is a floor, not the real
+        # size — don't quote a misleading number back at the user.
+        return f"the file is larger than the {MAX_UPLOAD_BYTES // 1024 // 1024} MB limit"
+    _, media_type = MEDIA_TYPES[suffix]
+    if not data.startswith(MAGIC[media_type]):
+        return (f"the file does not look like a valid {suffix[1:].upper()} "
+                f"(wrong content for its extension)")
+    return None
+
+
 def _nullable(*names: str) -> dict:
     """Every extracted field is nullable: absence is a finding input, not an error."""
     return {

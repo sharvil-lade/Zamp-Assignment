@@ -72,6 +72,31 @@ If asked *"where's sanctions screening?"* the answer is: **"Deliberately out of 
 | Findings-then-decide | Rules returning statuses directly | Makes reasoning visible for free, and makes `decide()` untouchable by rule changes. |
 | Deterministic decision | LLM-as-judge | Reproducible on camera, testable without mocking, explainable to a non-technical buyer. |
 
+## Security and hygiene posture
+
+Not a security product, but the obvious boundaries are held:
+
+| Control | Where |
+|---|---|
+| **Upload allow-list** | `.pdf` `.png` `.jpg` `.jpeg` only, checked by extension **and magic bytes** — a renamed `.exe` is refused |
+| **Upload size cap** | 10 MB; the request body is read with a bounded `read()`, never unbounded into memory |
+| **Empty / corrupt files** | Refused at the boundary with a readable reason |
+| **Path traversal** | The uploaded filename is discarded — only its extension is used, and the file is written as `<doc_type><ext>`. `store.upload_dir()` additionally refuses any id that is not `VS-\d{4,}` |
+| **Secret redaction** | Provider errors are echoed into the audit trail, so anything matching `sk-[A-Za-z0-9_-]{8,}` is replaced before persistence |
+| **No secrets in source** | Asserted by a test that scans every shipped module and template |
+| **`.gitignore`** | `.env`, `vendor.db`, `uploads/`, caches and Python artifacts; `.env.example` stays committed |
+| **Error surfaces** | Browsers get a readable page, API clients get JSON. No traceback ever reaches a response |
+
+**A rejected attachment does not fail the run.** "Vendors attach the wrong documents" is in the
+problem statement, so it must be a *fixable finding*: the file is not saved, R02 reports the
+document as missing, and the reason is shown on the run page and recorded in the audit trail.
+Before hardening, every bad upload produced `ERROR`.
+
+**Document contents are in the audit trail by design** — `ai_call` events store the model's raw
+response, which is the point of an auditable AI-assisted decision. Nothing is written to stdout or
+the server log: verified that account numbers and key-shaped strings appear zero times in
+`server.log` across a full demo run.
+
 ## Known limitations — state these before being asked
 
 1. **No existence verification.** A structurally perfect but unissued GSTIN passes. Mitigation is a registry call; it is deferred, not overlooked.
@@ -79,5 +104,11 @@ If asked *"where's sanctions screening?"* the answer is: **"Deliberately out of 
 3. **No duplicate detection.** The same vendor submitted twice produces two independent Approvals.
 4. **Single-jurisdiction depth.** The cross-field checks are India-specific. The US path validates format only.
 5. **No persistence of uploaded documents beyond the run.** `/reset` deletes them.
+6. **No authentication.** Anyone who can reach the app can submit, review, and reset. Single
+   reviewer, single machine — assumption A4.
+7. **No rate limiting or CSRF protection.** Out of scope for a local demo; both are standard
+   middleware if this were ever exposed.
+8. **`/reset` is unauthenticated and destructive.** It exists for demo repeatability and is
+   confirm-gated in the UI only.
 
 Volunteering these is stronger than being caught by them. The brief says a strong submission handles edge cases *deliberately* — knowing precisely where your boundary is counts as deliberate.

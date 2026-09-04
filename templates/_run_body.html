@@ -75,6 +75,21 @@
     </ol>
   </section>
 
+  {# --- rejected uploads --- #}
+  {% if rejected_uploads %}
+  <section class="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-5">
+    <h2 class="text-xs font-semibold uppercase tracking-wide text-amber-700">
+      Attachments we could not read
+    </h2>
+    <ul class="mt-2 space-y-1 text-sm text-amber-900">
+      {% for r in rejected_uploads %}
+      <li><span class="mono">{{ r.filename }}</span> — {{ r.reason }}.
+        It was not saved, so this document counts as not attached.</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   {# --- findings --- #}
   {% if findings %}
   <section class="mt-6">

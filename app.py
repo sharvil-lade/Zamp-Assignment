@@ -11,8 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import extract
 import pipeline
@@ -33,6 +34,25 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Vendor Onboarding Decision Engine", lifespan=lifespan)
+
+HTML_MESSAGES = {
+    404: "We couldn't find that.",
+    400: "That request wasn't something we could use.",
+    409: "That has already been done.",
+    500: "Something went wrong on our side.",
+}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException):
+    """A browser gets a readable page; an API client still gets JSON."""
+    wants_html = "text/html" in request.headers.get("accept", "")
+    if not wants_html:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    return templates.TemplateResponse(request, "error.html", {
+        "code": exc.status_code,
+        "message": exc.detail or HTML_MESSAGES.get(exc.status_code, "Something went wrong."),
+    }, status_code=exc.status_code)
 
 
 # --- samples ----------------------------------------------------------------
@@ -87,8 +107,21 @@ def _save_uploads(run_id: str, form) -> None:
     for doc_type in extract.DOC_TYPES:
         upload = form.get(doc_type)
         if upload is not None and getattr(upload, "filename", ""):
-            suffix = Path(upload.filename).suffix.lower() or ".pdf"
-            (dest / f"{doc_type}{suffix}").write_bytes(upload.file.read())
+            data = upload.file.read(extract.MAX_UPLOAD_BYTES + 1)
+            reason = extract.check_upload(upload.filename, data)
+            if reason:
+                # Not saved, so R02 reports the document as missing — a fixable
+                # finding rather than a crashed run. The reason is recorded so the
+                # reviewer and the audit trail can both see what was wrong.
+                store.add_event(run_id, "intake", "upload_rejected", detail={
+                    "document": doc_type,
+                    "filename": Path(upload.filename).name,
+                    "reason": reason,
+                    "bytes": len(data),
+                })
+                continue
+            suffix = Path(upload.filename).suffix.lower()
+            (dest / f"{doc_type}{suffix}").write_bytes(data)
         elif doc_type in fixture_docs:
             src = SAMPLE_DIR / "pdfs" / fixture_docs[doc_type]
             if src.exists():
@@ -260,6 +293,8 @@ def _run_context(request: Request, run_id: str) -> dict:
         "comparisons": _comparisons(run),
         "events": events,
         "internal_note": note,
+        "rejected_uploads": [e["detail"] for e in events
+                             if e["event_type"] == "upload_rejected"],
         "has_documents": run["extracted"] is not None,
         # Not `status != RUNNING`: the status is durable before stage 7 runs.
         "finished": any(e["event_type"] == "run_finished" for e in events),

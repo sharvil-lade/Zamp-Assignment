@@ -3,7 +3,10 @@ uvicorn[standard]
 jinja2
 python-multipart
 anthropic
+
+# tests
 pytest
+httpx           # required by fastapi.testclient
 
 # reportlab is only needed to regenerate samples/pdfs/ via samples/make_pdfs.py;
 # the committed PDFs mean the app itself never imports it.

@@ -1201,3 +1201,503 @@ def test_draft_prompt_forbids_inventing_requirements():
     assert "Do not mention internal rule identifiers" in p
     assert "your submission is incomplete" in p          # the anti-example
     assert set(extract.DRAFT_SCHEMA["properties"]) == {"subject", "body"}
+
+
+# ============================================================================
+# Part 7 — hardening
+# ============================================================================
+
+import io  # noqa: E402
+
+
+# --- upload validation ------------------------------------------------------
+
+GOOD_PDF = b"%PDF-1.4\n% real enough\n"
+GOOD_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
+GOOD_JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 40
+
+
+@pytest.mark.parametrize("filename,data", [
+    ("cheque.pdf", GOOD_PDF), ("scan.PDF", GOOD_PDF),
+    ("scan.png", GOOD_PNG), ("photo.jpg", GOOD_JPG), ("photo.jpeg", GOOD_JPG),
+])
+def test_valid_uploads_are_accepted(filename, data):
+    import extract
+    assert extract.check_upload(filename, data) is None
+
+
+@pytest.mark.parametrize("filename,data,expect", [
+    ("notes.txt", b"hello", "not a supported file type"),
+    ("payload.exe", b"MZ\x90\x00", "not a supported file type"),
+    ("doc.docx", GOOD_PDF, "not a supported file type"),
+    ("noext", GOOD_PDF, "not a supported file type"),
+    ("empty.pdf", b"", "the file is empty"),
+    ("renamed.pdf", b"MZ\x90\x00 this is an exe", "does not look like a valid PDF"),
+    ("truncated.png", b"\x89PNGbroken", "does not look like a valid PNG"),
+])
+def test_bad_uploads_are_rejected_with_a_readable_reason(filename, data, expect):
+    import extract
+    reason = extract.check_upload(filename, data)
+    assert reason is not None and expect in reason
+
+
+def test_oversized_upload_is_rejected():
+    import extract
+    big = GOOD_PDF + b"\x00" * (extract.MAX_UPLOAD_BYTES + 1)
+    reason = extract.check_upload("huge.pdf", big)
+    assert reason and "limit" in reason
+
+
+def test_upload_rejection_reason_names_the_allowed_types():
+    import extract
+    reason = extract.check_upload("x.txt", b"hi")
+    for ext in (".pdf", ".png", ".jpg"):
+        assert ext in reason
+
+
+# --- a bad attachment must not crash the run --------------------------------
+
+class FakeUpload:
+    def __init__(self, filename, data):
+        self.filename = filename
+        self.file = io.BytesIO(data)
+
+
+def form_with(files: dict, sample: str = "") -> dict:
+    form = {"sample": sample}
+    form.update(files)
+    return form
+
+
+def test_rejected_upload_is_reported_not_saved(db):
+    import app
+    run_id = db.create_run("Wrong File Ltd", base_submission())
+    app._save_uploads(run_id, form_with({"bank_proof": FakeUpload("x.exe", b"MZ")}))
+
+    assert db.saved_documents(run_id) == {}
+    rejected = [e for e in db.get_events(run_id) if e["event_type"] == "upload_rejected"]
+    assert len(rejected) == 1
+    detail = json.loads(rejected[0]["detail_json"])
+    assert detail["document"] == "bank_proof"
+    assert detail["filename"] == "x.exe"
+    assert "not a supported file type" in detail["reason"]
+
+
+def test_bad_attachment_yields_pending_not_error(db):
+    """A vendor attaching the wrong file is a fixable problem, not a crash."""
+    import app
+    import pipeline
+    run_id = db.create_run("Wrong File Ltd", base_submission())
+    app._save_uploads(run_id, form_with({
+        "bank_proof": FakeUpload("cheque.exe", b"MZ\x90\x00"),
+        "incorporation_certificate": FakeUpload("cert.pdf", GOOD_PDF),
+        "insurance_certificate": FakeUpload("ins.pdf", GOOD_PDF)}))
+
+    status = pipeline.run(run_id, today=TODAY, draft_fn=fake_drafter(),
+                          extract_fn=lambda p, t: (dict(FAKE_DOCS[t]), {
+                              "purpose": "extract:" + t, "model": "fake",
+                              "input_summary": p.name, "raw_response": "{}",
+                              "usage": {"input_tokens": 1, "output_tokens": 1}}))
+    assert status == "PENDING"                      # not ERROR
+    assert [f["rule_id"] for f in db.get_findings(run_id)] == ["R02"]
+
+
+def test_run_page_and_export_render_a_rejected_upload(db):
+    """The rejection must survive rendering, not just persistence."""
+    import app
+    from fastapi.testclient import TestClient
+    import pipeline
+
+    run_id = db.create_run("Wrong File Ltd", base_submission())
+    app._save_uploads(run_id, form_with({
+        "bank_proof": FakeUpload("cheque.exe", b"MZ-not-a-pdf"),
+        "incorporation_certificate": FakeUpload("cert.pdf", GOOD_PDF),
+        "insurance_certificate": FakeUpload("ins.pdf", GOOD_PDF)}))
+    pipeline.run(run_id, today=TODAY, draft_fn=fake_drafter(),
+                 extract_fn=fake_extractor())
+
+    client = TestClient(app.app)
+    page = client.get("/run/" + run_id)
+    assert page.status_code == 200
+    assert "Attachments we could not read" in page.text
+    assert "cheque.exe" in page.text
+    assert "not a supported file type" in page.text
+
+    ex = client.get("/run/" + run_id + "/export")
+    assert ex.status_code == 200                      # regression: this 500'd
+    assert any(e["event_type"] == "upload_rejected" for e in ex.json()["events"])
+
+
+def test_a_traversal_filename_cannot_escape_the_upload_directory(db):
+    import app
+    run_id = db.create_run("Sneaky Ltd", base_submission())
+    app._save_uploads(run_id, form_with({
+        "bank_proof": FakeUpload("../../../../evil.pdf", GOOD_PDF)}))
+    saved = db.saved_documents(run_id)
+    assert list(saved) == ["bank_proof"]
+    assert saved["bank_proof"].parent == db.upload_dir(run_id)
+
+
+@pytest.mark.parametrize("bad_id", ["../etc", "VS-0001/../..", "..", "", "VS-x"])
+def test_upload_dir_rejects_ids_that_are_not_run_ids(bad_id):
+    import store
+    with pytest.raises(ValueError):
+        store.upload_dir(bad_id)
+
+
+# --- secrets never reach the audit trail ------------------------------------
+
+def test_error_details_redact_anything_key_shaped():
+    import pipeline
+    exc = RuntimeError("auth failed for sk-ant-api03-AbC123secretKEYvalue-xyz")
+    safe = pipeline._safe_error(exc)
+    assert "sk-ant-api03-AbC123secretKEYvalue-xyz" not in safe
+    assert "REDACTED" in safe
+
+
+def test_persisted_stage_failure_contains_no_key(db):
+    import pipeline
+
+    def exploding(path, doc_type):
+        raise RuntimeError("401 from provider, key sk-ant-api03-LEAKEDKEY0000")
+
+    run_id = db.create_run("Leaky Ltd", base_submission())
+    attach(db, run_id, *FAKE_DOCS)
+    pipeline.run(run_id, today=TODAY, extract_fn=exploding, draft_fn=fake_drafter())
+
+    blob = json.dumps([dict(e) for e in db.get_events(run_id)])
+    assert "sk-ant-api03-LEAKEDKEY0000" not in blob
+    assert "REDACTED" in blob
+
+
+APP_MODULES = ("app.py", "pipeline.py", "rules.py", "store.py",
+               "extract.py", "matching.py")
+
+
+def test_no_api_key_appears_anywhere_in_application_source():
+    """Scans shipped code. Test fixtures deliberately contain fake key strings."""
+    import pathlib
+    import re
+    pattern = re.compile(r"sk-ant-[A-Za-z0-9]")
+    targets = [pathlib.Path(m) for m in APP_MODULES]
+    targets += list(pathlib.Path("templates").glob("*.html"))
+    targets += list(pathlib.Path("samples").glob("*.py"))
+    targets += list(pathlib.Path("samples").glob("*.json"))
+    for path in targets:
+        assert not pattern.search(path.read_text(encoding="utf-8")), path
+
+
+def test_env_example_holds_no_actual_key():
+    import pathlib
+    text = pathlib.Path(".env.example").read_text(encoding="utf-8")
+    assert "ANTHROPIC_API_KEY=" in text
+    assert text.strip().endswith("ANTHROPIC_API_KEY=")   # blank value
+
+
+def test_missing_api_key_is_a_clear_error_not_a_stack_trace(monkeypatch):
+    import extract
+    monkeypatch.setattr(extract, "_client", None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(RuntimeError) as exc:
+        extract.client()
+    assert "ANTHROPIC_API_KEY" in str(exc.value)
+    assert ".env" in str(exc.value)
+
+
+def test_gitignore_covers_secrets_and_runtime_state():
+    import pathlib
+    text = pathlib.Path(".gitignore").read_text(encoding="utf-8")
+    for entry in (".env", "vendor.db", "uploads/", "__pycache__/", ".pytest_cache/"):
+        assert entry in text, entry
+    assert "!.env.example" in text          # the template stays committed
+
+
+# --- one failed stage must not corrupt persisted state ----------------------
+
+def test_a_failed_stage_leaves_earlier_state_intact(db):
+    """Findings written before the failure survive; nothing is half-written."""
+    import pipeline
+
+    def exploding(path, doc_type):
+        raise RuntimeError("extraction died")
+
+    run_id = db.create_run("Half Ltd", base_submission(contact_phone=""))
+    attach(db, run_id, *FAKE_DOCS)
+    assert pipeline.run(run_id, today=TODAY, extract_fn=exploding,
+                        draft_fn=fake_drafter()) == "ERROR"
+
+    run = db.get_run(run_id)
+    assert run["status"] == "ERROR"
+    assert run["submission"]["legal_entity_name"] == "Sundaram Industrial Supplies LLP"
+    assert run["extracted"] is None                 # never half-written
+    assert run["followup_draft"] is None
+    assert [f["rule_id"] for f in db.get_findings(run_id)] == ["R01"]
+    assert run["duration_ms"] is not None
+
+
+def test_error_run_still_emits_the_terminal_marker(db):
+    import pipeline
+    run_id = db.create_run("Boom Ltd", base_submission())
+    attach(db, run_id, *FAKE_DOCS)
+    pipeline.run(run_id, today=TODAY,
+                 extract_fn=lambda p, t: (_ for _ in ()).throw(RuntimeError("x")),
+                 draft_fn=fake_drafter())
+    finished = [e for e in db.get_events(run_id) if e["event_type"] == "run_finished"]
+    assert len(finished) == 1
+    assert json.loads(finished[0]["detail_json"])["status"] == "ERROR"
+
+
+def test_communication_failure_never_overwrites_the_decision(db):
+    import pipeline
+    run_id = db.create_run("Draft Fail Ltd", base_submission(contact_phone=""))
+    attach(db, run_id, *FAKE_DOCS)
+
+    def exploding_draft(*a, **k):
+        raise RuntimeError("drafting died")
+
+    status = pipeline.run(run_id, today=TODAY, extract_fn=fake_extractor(),
+                          draft_fn=exploding_draft)
+    assert status == "PENDING"
+    run = db.get_run(run_id)
+    assert run["status"] == "PENDING" and run["status"] != "ERROR"
+    assert run["followup_draft"] is None
+    assert [f["rule_id"] for f in db.get_findings(run_id)] == ["R01"]
+    assert any(e["event_type"] == "decision" for e in db.get_events(run_id))
+
+
+def test_a_run_after_a_failure_works_normally(db):
+    """A crashed run must not poison the next one."""
+    import pipeline
+    bad = db.create_run("Boom Ltd", base_submission())
+    attach(db, bad, *FAKE_DOCS)
+    pipeline.run(bad, today=TODAY, draft_fn=fake_drafter(),
+                 extract_fn=lambda p, t: (_ for _ in ()).throw(RuntimeError("x")))
+
+    good = db.create_run("Fine Ltd", base_submission())
+    attach(db, good, *FAKE_DOCS)
+    assert pipeline.run(good, today=TODAY, extract_fn=fake_extractor(),
+                        draft_fn=fake_drafter()) == "APPROVED"
+    assert db.get_run(bad)["status"] == "ERROR"     # unchanged
+
+
+# --- reset ------------------------------------------------------------------
+
+def test_reset_clears_runs_findings_events_and_uploads(db):
+    import pipeline
+    run_id = db.create_run("Doomed Ltd", base_submission(contact_phone=""))
+    attach(db, run_id, *FAKE_DOCS)
+    pipeline.run(run_id, today=TODAY, extract_fn=fake_extractor(),
+                 draft_fn=fake_drafter())
+    assert db.list_runs() and db.get_findings(run_id) and db.get_events(run_id)
+    assert db.upload_dir(run_id).exists()
+
+    db.reset_all()
+    assert db.list_runs() == []
+    assert db.get_findings(run_id) == []
+    assert db.get_events(run_id) == []
+    assert not db.UPLOAD_DIR.exists()
+    assert db.create_run("Fresh", {}) == "VS-0001"   # ids restart
+
+
+def test_reset_is_safe_when_nothing_exists(db):
+    db.reset_all()
+    db.reset_all()
+    assert db.list_runs() == []
+
+
+# --- invalid submission data ------------------------------------------------
+
+def test_completely_empty_submission_is_pending_not_a_crash(db):
+    run_id, status = execute(db, {})
+    assert status == "PENDING"
+    rule_ids = {f["rule_id"] for f in db.get_findings(run_id)}
+    assert rule_ids == {"R01"}
+    assert len(db.get_findings(run_id)) == len(rules.ALWAYS_REQUIRED)
+
+
+@pytest.mark.parametrize("junk", [
+    {"legal_entity_name": None}, {"legal_entity_name": 12345},
+    {"gstin": "  "}, {"pan": "\t\n"}, {"entity_type": "Nonsense Ltd Type"},
+    {"country_of_incorporation": "ZZ"}, {"tax_id_type": "VAT"},
+])
+def test_junk_field_values_never_raise(db, junk):
+    """Bad data becomes findings, never a 500."""
+    run_id, status = execute(db, base_submission(**junk))
+    assert status in ("APPROVED", "PENDING", "REJECTED")
+    assert db.get_run(run_id)["status"] == status
+
+
+def test_absurdly_long_values_are_handled(db):
+    run_id, status = execute(db, base_submission(legal_entity_name="A" * 20000))
+    assert status in ("APPROVED", "PENDING", "REJECTED")
+
+
+def test_unicode_and_quotes_survive_persistence(db):
+    name = "Sündaram “Industrial” Supplies LLP <script>alert(1)</script>"
+    run_id, _ = execute(db, base_submission(legal_entity_name=name))
+    assert db.get_run(run_id)["submission"]["legal_entity_name"] == name
+
+
+# --- HTTP surface -----------------------------------------------------------
+
+@pytest.fixture
+def client(db):
+    from fastapi.testclient import TestClient
+    import app
+    return TestClient(app.app)
+
+
+def seeded_pending(db):
+    import pipeline
+    run_id = db.create_run("Sundaram Industrial Supplies LLP",
+                           base_submission(contact_phone=""))
+    attach(db, run_id, *FAKE_DOCS)
+    pipeline.run(run_id, today=TODAY, extract_fn=fake_extractor(),
+                 draft_fn=fake_drafter())
+    return run_id
+
+
+def test_unknown_run_is_404_on_every_run_route(client):
+    for path in ("/run/VS-9999", "/run/VS-9999/export", "/run/VS-9999/stages"):
+        assert client.get(path).status_code == 404
+    assert client.post("/run/VS-9999/send").status_code == 404
+
+
+def test_unknown_sample_is_404(client):
+    assert client.get("/samples/nope").status_code == 404
+
+
+def test_browser_gets_an_html_error_page(client):
+    r = client.get("/run/VS-9999", headers={"Accept": "text/html"})
+    assert r.status_code == 404
+    assert "text/html" in r.headers["content-type"]
+    assert "Back to the dashboard" in r.text
+    assert "Traceback" not in r.text
+
+
+def test_api_client_still_gets_json_errors(client):
+    r = client.get("/run/VS-9999", headers={"Accept": "application/json"})
+    assert r.status_code == 404
+    assert r.json()["detail"]
+
+
+def test_send_without_a_draft_is_400(client, db):
+    run_id, _ = execute(db, base_submission())          # APPROVED, no draft
+    r = client.post(f"/run/{run_id}/send")
+    assert r.status_code == 400 and "no follow-up draft" in r.json()["detail"]
+
+
+def test_duplicate_send_is_409(client, db):
+    run_id = seeded_pending(db)
+    assert client.post(f"/run/{run_id}/send", json={"actor": "priya"}).status_code == 200
+    r = client.post(f"/run/{run_id}/send", json={"actor": "priya"})
+    assert r.status_code == 409 and "already sent" in r.json()["detail"]
+
+
+def test_send_is_the_only_thing_that_sets_sent_at(client, db):
+    run_id = seeded_pending(db)
+    assert db.get_run(run_id)["followup_draft"] is not None
+    assert db.get_run(run_id)["followup_sent_at"] is None
+    client.post(f"/run/{run_id}/send", json={"actor": "priya"})
+    assert db.get_run(run_id)["followup_sent_at"] is not None
+
+
+def test_submit_rejects_a_non_object_json_body(client):
+    assert client.post("/submit", json=["not", "an", "object"]).status_code == 400
+
+
+def test_dashboard_filter_ignores_an_unknown_status(client, db):
+    execute(db, base_submission())
+    assert client.get("/dashboard?status=NONSENSE").status_code == 200
+
+
+def test_dashboard_and_submit_render_when_empty(client):
+    assert "No runs yet" in client.get("/dashboard").text
+    assert client.get("/").status_code == 200
+
+
+def test_pages_never_render_a_traceback(client, db):
+    run_id = seeded_pending(db)
+    for path in ("/", "/dashboard", f"/run/{run_id}", f"/run/{run_id}/stages"):
+        text = client.get(path).text
+        assert "Traceback" not in text and "sqlite3" not in text
+
+
+# --- export completeness ----------------------------------------------------
+
+def test_export_is_json_serialisable_and_complete(client, db):
+    run_id = seeded_pending(db)
+    r = client.get(f"/run/{run_id}/export")
+    assert r.status_code == 200
+    ex = r.json()
+    assert set(ex) == {"run", "submission", "extracted", "findings",
+                       "communication", "events", "exported_at"}
+    assert len(ex["events"]) == len(db.get_events(run_id))
+    assert len(ex["findings"]) == len(db.get_findings(run_id))
+    assert json.dumps(ex)                                   # round-trips
+
+
+def test_export_records_every_ai_call_with_usage(db):
+    import app
+    run_id = seeded_pending(db)
+    ex = app.export_run(run_id)
+    ai = [e for e in ex["events"] if e["event_type"] == "ai_call"]
+    assert ai
+    for e in ai:
+        assert e["detail"]["model"]
+        assert e["detail"]["usage"]["input_tokens"] > 0
+        assert e["detail"]["raw_response"]
+
+
+# --- audit trail integrity --------------------------------------------------
+
+def test_events_are_ordered_and_attributed(db):
+    run_id = seeded_pending(db)
+    events = db.get_events(run_id)
+    assert [e["id"] for e in events] == sorted(e["id"] for e in events)
+    assert all(e["ts"] and e["actor"] and e["stage"] for e in events)
+    assert all(e["actor"] == "system" for e in events)
+
+
+def test_the_audit_trail_is_append_only_in_practice(db):
+    """Nothing in the codebase updates or deletes an event except reset."""
+    import pathlib
+    src = pathlib.Path("store.py").read_text(encoding="utf-8")
+    assert "UPDATE events" not in src
+    deletes = [ln for ln in src.splitlines() if "DELETE FROM events" in ln]
+    assert len(deletes) == 1                        # only reset_all
+
+
+def test_every_stage_emits_start_and_end(db):
+    run_id = seeded_pending(db)
+    events = db.get_events(run_id)
+    started = {e["stage"] for e in events if e["event_type"] == "stage_started"}
+    ended = {e["stage"] for e in events
+             if e["event_type"] in ("stage_completed", "stage_failed")}
+    assert started == ended
+
+
+# --- AI cannot determine the final status -----------------------------------
+
+def test_decide_is_reachable_only_from_findings():
+    import inspect
+    src = inspect.getsource(rules.decide)
+    assert "findings" in src
+    for word in ("extract", "matching", "anthropic", "client", "submission"):
+        assert word not in src
+
+
+def test_no_ai_module_can_reach_the_decision():
+    import pathlib
+    for module in ("extract.py", "matching.py"):
+        src = pathlib.Path(module).read_text(encoding="utf-8")
+        assert "decide(" not in src
+        assert "import rules" not in src or module == "matching.py"
+
+
+def test_matching_imports_only_pure_helpers_from_rules():
+    """It may borrow normalisation; it may never call the decision function."""
+    import pathlib
+    src = pathlib.Path("matching.py").read_text(encoding="utf-8")
+    assert "from rules import NameVerdict, normalize_name" in src
+    assert "decide(" not in src and "rules.decide" not in src
