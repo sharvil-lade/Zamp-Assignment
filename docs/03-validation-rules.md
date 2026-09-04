@@ -2,7 +2,9 @@
 
 **12 rules. No more.** Severity is `BLOCK` (credibility failure, leads to Rejected) or `FIX` (recoverable, leads to Pending). There is no third severity and no weighting.
 
-Every rule is a pure function in `rules.py`: `(submission, extracted) -> Finding | None`. No I/O, no network, no clock reads except a `today` value injected as a parameter.
+Every rule is a pure function in `rules.py`: `(submission, extracted, ctx) -> list[Finding]`. No I/O, no network, no clock reads — `ctx` (a `RuleContext`) carries the injected `today` and `names_match` comparator.
+
+Rules return a **list**, not `Finding | None`: R01 and R10 can legitimately produce more than one finding in a single pass (three blank fields should be reported as three items, not one at a time across three resubmissions).
 
 ## Rule table
 
@@ -13,9 +15,9 @@ Every rule is a pure function in `rules.py`: `(submission, extracted) -> Finding
 | **R03** | PAN does not match `^[A-Z]{5}[0-9]{4}[A-Z]$` | FIX | `pan` | `PAN format is invalid` · expected `AAAAA9999A` · actual `ABCD1234F` | unit test |
 | **R04** | GSTIN fails the 15-char pattern or the **mod-36 checksum** | FIX | `gstin` | `GSTIN checksum is invalid — this is not an issued GST number` | unit test |
 | **R05** | IFSC does not match `^[A-Z]{4}0[A-Z0-9]{6}$` | FIX | `ifsc` | `IFSC format is invalid` · expected `AAAA0999999` | unit test |
-| **R06** | **GSTIN characters 3–12 differ from the submitted PAN** | **BLOCK** | `gstin`, `pan` | `GSTIN-embedded PAN does not match the submitted PAN` · expected `ABCDE1234F` · actual `ABCDE1234K` | **EC-4** |
+| **R06** | **GSTIN characters 3–12 differ from the submitted PAN** | **BLOCK** | `gstin`, `pan` | `GSTIN-embedded PAN does not match the submitted PAN` · expected `ABCFS1234K` · actual `ABCFS1234Z` | **EC-4** |
 | **R07** | **PAN 4th character contradicts the declared entity type** | **BLOCK** | `pan`, `entity_type` | `PAN encodes entity type 'Firm/LLP' but the submission declares 'Proprietorship'` | **EC-4** |
-| **R08** | GSTIN state code differs from the registered address state | FIX | `gstin`, `registered_address_state` | `GSTIN is registered in Karnataka but the address is in Maharashtra` | **EC-4** |
+| **R08** | GSTIN state code differs from the registered address state | FIX | `gstin`, `registered_address_state` | `GSTIN is registered in Karnataka (state code 29) but the registered address is in Maharashtra` | **EC-4** |
 | **R09** | **Bank account holder name differs from the legal entity name** | **BLOCK** | `legal_entity_name`, `bank_proof.account_holder_name` | `Bank account is held in a different name than the vendor entity` | **EC-3** |
 | **R10** | Bank proof account number or IFSC differs from the submitted values | **BLOCK** | `account_number`, `ifsc`, `bank_proof` | `Account number on the bank document does not match the submitted account number` | unit test |
 | **R11** | A document's `valid_until` is before today | FIX | `insurance_certificate.valid_until` | `Certificate of Insurance expired on 21 July 2026` | **EC-2** |
@@ -40,16 +42,24 @@ They are the **input-validation trust boundary**. A malformed GSTIN reaching R06
 A GSTIN is 15 characters: `[2 state code][10 PAN][1 registration count][Z][1 mod-36 checksum]`.
 
 ```
-2 9 A B C D E 1 2 3 4 F 1 Z 5
-|-|  |-----------------|  | |  |
- |            |           | |  +-- checksum (mod 36)
- |            |           | +----- always 'Z'
- |            |           +------- registration count for this PAN in this state
- |            +------------------- the PAN, positions 3-12
- +-------------------------------- state code (29 = Karnataka)
+ 2 9  A B C F S 1 2 3 4 K  1  Z  3
+ |_|  |_________________|  |  |  |
+  |            |           |  |  +-- checksum (mod 36)
+  |            |           |  +----- always 'Z'
+  |            |           +-------- registration count for this PAN in this state
+  |            +-------------------- the PAN, characters 3-12
+  +--------------------------------- state code (29 = Karnataka)
+                |
+                +-- within the PAN, the 4th character (here 'F') encodes legal form
 ```
 
-And within the PAN, the **4th character encodes legal form**:
+**Character positions matter.** The entity-type character is the **4th character of
+the PAN**, i.e. index 3 — in `ABCFS1234K` that is `F`, not the trailing `K`. An
+earlier draft of this document used `ABCDE1234F` as the sample PAN, whose 4th
+character is `D` (unmapped), which could never have demonstrated R07. Corrected
+in Part 2 when the tests caught it.
+
+The 4th-character mapping:
 
 | Char | Entity form | Accepted `entity_type` |
 |---|---|---|
@@ -78,7 +88,7 @@ Same code, different context, justified by consequence. Worth 15 seconds of the 
 
 ### R11 uses an injected `today`
 
-`check_r11(submission, extracted, today)` — never `date.today()` inside the rule. Otherwise the test suite breaks the day the sample data expires, and the demo silently changes behaviour over time.
+`r11_document_expiry(submission, extracted, ctx)` reads `ctx.today` — never `date.today()` inside the rule. Otherwise the test suite breaks the day the sample data expires, and the demo silently changes behaviour over time.
 
 ## Coverage map
 

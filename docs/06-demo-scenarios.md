@@ -2,7 +2,7 @@
 
 Four scenarios. Each is a saved input loadable from a dropdown on the submit screen — no typing during the demo.
 
-> **Sample data note.** The GSTIN literals below are illustrative and are written as `29ABCDE1234F1Z<ck>`. Real sample fixtures are generated in Part 4 using `rules.gstin_checksum()` so that the 15th character is genuinely valid — otherwise R04 would fire in every scenario and mask the intended findings. **Never hand-write a GSTIN into a fixture.**
+> **Sample data note.** The GSTIN literals below are illustrative and are written as `29ABCFS1234K1Z<ck>`. The PAN is `ABCFS1234K`: its **4th character** is `F` (Firm/LLP), which is what R07 reads — not the trailing `K`. EC-4's PAN differs from the GSTIN-embedded one in the **last** character only, so R06 fires while R07 still sees a Firm/LLP code. Real sample fixtures are generated in Part 4 using `rules.gstin_checksum()` so that the 15th character is genuinely valid — otherwise R04 would fire in every scenario and mask the intended findings. **Never hand-write a GSTIN into a fixture.**
 
 ---
 
@@ -15,13 +15,13 @@ Four scenarios. Each is a saved input loadable from a dropdown on the submit scr
 | entity_type | `LLP` |
 | country_of_incorporation | `IN` |
 | registered_address_state | `Karnataka` |
-| tax_id_type / gstin | `GSTIN` / `29ABCDE1234F1Z<ck>` |
-| pan | `ABCDE1234F` |
+| tax_id_type / gstin | `GSTIN` / `29ABCFS1234K1Z<ck>` |
+| pan | `ABCFS1234K` |
 | account_holder_name | `Sundaram Industrial Supplies LLP` |
 | ifsc | `HDFC0001234` |
 | documents | all 3 attached, insurance valid until 2027-03-31 |
 
-**Internal consistency:** state code `29` = Karnataka ✓ · embedded PAN `ABCDE1234F` = submitted PAN ✓ · PAN 4th char `F` = Firm/LLP = declared `LLP` ✓ · bank holder name = entity name ✓
+**Internal consistency:** state code `29` = Karnataka ✓ · embedded PAN `ABCFS1234K` = submitted PAN ✓ · PAN 4th character `F` = Firm/LLP = declared `LLP` ✓ · bank holder name = entity name ✓
 
 **Rules triggered:** none. All 12 pass.
 
@@ -101,8 +101,8 @@ All documents present and current. All formats valid. Nothing looks wrong on the
 
 | Field | Value | |
 |---|---|---|
-| gstin | `29ABCDE1234F1Z<ck>` | |
-| pan | `ABCDE1234K` | changed |
+| gstin | `29ABCFS1234K1Z<ck>` | |
+| pan | `ABCFS1234Z` | changed |
 | entity_type | `Proprietorship` | changed |
 | registered_address_state | `Maharashtra` | changed |
 
@@ -110,7 +110,7 @@ All documents present and current. All formats valid. Nothing looks wrong on the
 
 | Rule | Sev | Finding |
 |---|---|---|
-| R06 | **BLOCK** | `GSTIN-embedded PAN does not match the submitted PAN` · expected `ABCDE1234F` · actual `ABCDE1234K` |
+| R06 | **BLOCK** | `GSTIN-embedded PAN does not match the submitted PAN` · expected `ABCFS1234K` · actual `ABCFS1234Z` |
 | R07 | **BLOCK** | `PAN encodes entity type 'Firm/LLP' but the submission declares 'Proprietorship'` |
 | R08 | FIX | `GSTIN is registered in Karnataka (state code 29) but the registered address is in Maharashtra` |
 

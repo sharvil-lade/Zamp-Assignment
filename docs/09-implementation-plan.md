@@ -60,7 +60,10 @@ The sequence follows the case study's own guidance (`00-case-study-requirements.
 - All 12 rule functions. R09/R10/R11/R12 accept an `extracted` argument that is `None` for now — they return `None` under skip semantics, which is correct behaviour, not a stub.
 - `gstin_checksum(gstin) -> str` implementing mod-36
 - `decide(findings) -> str`
-- `pipeline.run(run_id)` executing stages 1, 2, 4, 6 with event emission and error containment
+- `pipeline.run(run_id)` executing stages 1, 2, 4, **5** and 6 with event emission and error containment.
+  Stage 5 runs here, not in Part 4: R06/R07/R08 need only the submission, and without them the
+  acceptance criterion below (a GSTIN/PAN mismatch returns REJECTED) is unreachable. R09–R12 are
+  present but self-skip while `extracted` is `None`. Part 4 adds the AI comparator, not the stage.
 - `POST /submit` accepting a JSON body (no file uploads yet)
 
 **Acceptance**

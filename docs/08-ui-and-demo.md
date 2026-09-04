@@ -38,8 +38,8 @@ Stages carrying an `[AI]` badge are visibly marked. That badge is the fastest wa
 +----------------------------------------------------------+
 | R06   BLOCK   Consistency                                |
 | GSTIN-embedded PAN does not match the submitted PAN      |
-|   expected  ABCDE1234F                                   |
-|   actual    ABCDE1234K                                   |
+|   expected  ABCFS1234K                                   |
+|   actual    ABCFS1234Z                                   |
 +----------------------------------------------------------+
 ```
 

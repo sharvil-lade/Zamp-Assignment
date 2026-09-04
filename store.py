@@ -169,7 +169,19 @@ def add_findings(run_id: str, findings) -> None:
         )
 
 
+def get_findings(run_id: str) -> list[dict]:
+    with _conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM findings WHERE run_id = ? ORDER BY id", (run_id,))]
+
+
 # --- events (append-only) ---------------------------------------------------
+
+def get_events(run_id: str) -> list[dict]:
+    with _conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM events WHERE run_id = ? ORDER BY id", (run_id,))]
+
 
 def add_event(
     run_id: str,

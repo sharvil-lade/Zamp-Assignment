@@ -77,7 +77,7 @@ The unit of reasoning. Immutable, emitted by rules, consumed only by `decide()` 
 
 ```python
 @dataclass(frozen=True)
-class Finding:
+class Finding:                     # rules return list[Finding]; [] means "rule passed"
     rule_id:  str                  # "R06"
     severity: str                  # "BLOCK" | "FIX"
     stage:    str                  # "consistency"
@@ -90,7 +90,7 @@ class Finding:
 `expected` and `actual` exist so the UI can render **both sides of the contradiction**. That is what turns a verdict into an explanation:
 
 > `R06 · BLOCK · GSTIN-embedded PAN does not match submitted PAN`
-> expected `ABCDE1234F` · actual `ABCDE1234K`
+> expected `ABCFS1234K` · actual `ABCFS1234Z`
 
 **Skip semantics.** A rule whose inputs are absent emits **nothing**. The absence is already reported by R01/R02; a rule must never double-report it. Example: if `incorporation_certificate` is missing, R02 fires and R12 stays silent.
 
