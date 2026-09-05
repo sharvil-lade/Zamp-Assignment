@@ -5,6 +5,8 @@ See docs/07-architecture.md.
 """
 
 import json
+import logging
+import re as _re
 import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -31,6 +33,31 @@ STATUSES = ("APPROVED", "PENDING", "REJECTED", "ERROR")
 async def lifespan(app: FastAPI):
     store.init_db()
     yield
+
+
+# The vendor token travels in the URL path, which means the access log would
+# record a working credential on every request. Redact it at the log boundary.
+_TOKEN_IN_PATH = _re.compile(r"(/vendor/onboard/)[A-Za-z0-9_\-]{16,}")
+
+
+def _redact(text: str) -> str:
+    """Keep the route, drop the credential. A function replacement rather than
+    a template string — backreference escaping is not worth the ambiguity."""
+    return _TOKEN_IN_PATH.sub(lambda m: m.group(1) + "<redacted>", text)
+
+
+class _RedactVendorToken(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            record.args = tuple(_redact(a) if isinstance(a, str) else a
+                                for a in record.args)
+        if isinstance(record.msg, str):
+            record.msg = _redact(record.msg)
+        return True
+
+
+for _name in ("uvicorn.access", "uvicorn.error"):
+    logging.getLogger(_name).addFilter(_RedactVendorToken())
 
 
 app = FastAPI(title="Vendor Onboarding Decision Engine", lifespan=lifespan)
@@ -179,6 +206,120 @@ async def submit(request: Request, background: BackgroundTasks):
                     "duration_ms": e["duration_ms"]}
                    for e in store.get_events(run_id)],
     }
+
+
+# ============================================================================
+# EMPLOYEE — case creation
+# ============================================================================
+
+@app.get("/onboardings/new")
+def new_case_form(request: Request):
+    return templates.TemplateResponse(request, "onboarding_new.html", {})
+
+
+@app.post("/onboardings")
+async def create_case(request: Request):
+    """Create a case and mint its one-time vendor link.
+
+    The raw token is returned to the employee exactly once, here. Only its hash
+    is persisted, so the link cannot be recovered from the database or the logs.
+    """
+    form = await request.form()
+    vendor_name = (form.get("vendor_name") or "").strip()
+    if not vendor_name:
+        raise HTTPException(400, "Vendor or company name is required")
+
+    token = store.new_token()
+    case_id = store.create_case(
+        vendor_name,
+        (form.get("contact_name") or "").strip(),
+        (form.get("contact_email") or "").strip(),
+        token)
+
+    return templates.TemplateResponse(request, "onboarding_created.html", {
+        "case": store.get_case(case_id),
+        "vendor_url": str(request.base_url).rstrip("/") + f"/vendor/onboard/{token}",
+    })
+
+
+# ============================================================================
+# VENDOR PORTAL — token is the only authorisation. No case ids are trusted.
+# ============================================================================
+
+def _case_for_token(token: str) -> dict:
+    """A bad, unknown or expired token is indistinguishable from a wrong URL."""
+    case = store.get_case_by_token(token)
+    if case is None:
+        raise HTTPException(404, "This onboarding link is not valid.")
+    return case
+
+
+def _vendor_form_context(request: Request, token: str, case: dict) -> dict:
+    """Field definitions come from rules.py — the vendor form is not a second schema."""
+    return {
+        "token": token,
+        "case": case,
+        "groups": [
+            ("Your company", ["legal_entity_name", "entity_type",
+                              "country_of_incorporation", "registered_address_state"]),
+            ("Contact", ["contact_name", "contact_email", "contact_phone"]),
+            ("Tax registration", ["tax_id_type", "gstin", "pan"]),
+            ("Bank account", ["account_holder_name", "account_number",
+                              "ifsc", "bank_name"]),
+        ],
+        "labels": rules.FIELD_LABELS,
+        "selects": {"entity_type": rules.ENTITY_TYPES,
+                    "country_of_incorporation": rules.COUNTRIES,
+                    "tax_id_type": rules.TAX_ID_TYPES},
+        "mono": ["gstin", "pan", "ifsc", "account_number"],
+        "documents": [(k, rules.DOCUMENT_LABELS[k]) for k in extract.DOC_TYPES],
+        "prefill": {
+            "legal_entity_name": case["vendor_name"],
+            "contact_name": case["contact_name"] or "",
+            "contact_email": case["contact_email"] or "",
+        },
+        "max_mb": extract.MAX_UPLOAD_BYTES // 1024 // 1024,
+    }
+
+
+@app.get("/vendor/onboard/{token}")
+def vendor_form(request: Request, token: str):
+    case = _case_for_token(token)
+    if case["status"] != store.AWAITING_VENDOR:
+        return templates.TemplateResponse(request, "vendor_submitted.html",
+                                          {"case": case, "already": True})
+    return templates.TemplateResponse(request, "vendor_form.html",
+                                      _vendor_form_context(request, token, case))
+
+
+@app.post("/vendor/onboard/{token}")
+async def vendor_submit(request: Request, token: str, background: BackgroundTasks):
+    """Vendor submission. Hands straight to the existing PS-2 pipeline, unchanged."""
+    case = _case_for_token(token)
+    if case["status"] != store.AWAITING_VENDOR:
+        # One link, one submission. Prevents a replayed link starting a second run.
+        raise HTTPException(409, "This onboarding has already been submitted.")
+
+    form = await request.form()
+    submission = _submission_from_form(form)
+
+    run_id = store.create_run(submission.get("legal_entity_name")
+                              or case["vendor_name"], submission)
+    _save_uploads(run_id, form)                     # existing upload validation
+    store.attach_run_to_case(case["id"], run_id)
+    store.add_event(run_id, "intake", "vendor_submitted", actor="vendor",
+                    detail={"case_id": case["id"]})   # never the token
+    background.add_task(pipeline.run, run_id, pause=pipeline.DEMO_PAUSE_S)
+
+    return RedirectResponse(f"/vendor/onboard/{token}/submitted", status_code=303)
+
+
+@app.get("/vendor/onboard/{token}/submitted")
+def vendor_confirmation(request: Request, token: str):
+    """Confirmation only. No status, no findings, no run id, no internal detail."""
+    case = _case_for_token(token)
+    return templates.TemplateResponse(request, "vendor_submitted.html",
+                                      {"case": case, "already": False})
 
 
 # --- run view ---------------------------------------------------------------
@@ -416,6 +557,7 @@ def dashboard(request: Request, status: str | None = None):
     }
     return templates.TemplateResponse(request, "dashboard.html", {
         "runs": runs, "stats": stats, "active": status, "statuses": STATUSES,
+        "cases": store.list_cases(),
     })
 
 

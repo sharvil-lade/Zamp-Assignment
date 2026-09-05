@@ -36,6 +36,24 @@ Those boundaries are deliberate and documented in
 
 ---
 
+## Two ways in
+
+**Vendor portal (the product flow).** An employee creates a case at `/onboardings/new`,
+copies the generated secure link, and sends it to the vendor. The vendor opens
+`/vendor/onboard/<token>`, fills in their own details, uploads their documents, and submits —
+which hands straight to the pipeline below. The employee watches it on `/dashboard`.
+
+```
+Employee -> Create case -> Secure link -> Vendor -> Submit -> PS-2 pipeline -> Dashboard
+```
+
+The token is 32 random bytes; only its SHA-256 is stored, it is never written to the logs, and
+it works exactly once. A vendor sees their own company name and nothing internal — no status,
+no findings, no rules, no run id.
+
+**Direct submit (`/`).** The original internal form with the demo-sample dropdown. Still there,
+still what the four scenarios run through.
+
 ## End-to-end workflow
 
 ```
@@ -99,14 +117,16 @@ pipeline.py       the 7 stages; event emission; error containment
 rules.py          the 12 rules + decide(); pure, stdlib only, zero I/O
 extract.py        Claude document extraction + follow-up drafting
 matching.py       name normalisation, difflib scoring, ambiguous-band escalation
-store.py          sqlite3; 3 tables (runs, findings, events)
-templates/        base · submit · run · _run_body · dashboard · error
+store.py          sqlite3; 4 tables (runs, findings, events, onboarding_cases)
+templates/        employee: base · submit · run · _run_body · dashboard · error
+                  employee: onboarding_new · onboarding_created
+                  vendor:   vendor_base · vendor_form · vendor_submitted
 samples/          4 scenario fixtures + 6 generated PDFs + their generators
-test_rules.py     179 tests, no network required
+test_rules.py     224 tests, no network required
 docs/             00–13, the design record
 ```
 
-Six Python modules, six templates. Full detail in
+Six Python modules, eleven templates. Full detail in
 [docs/07-architecture.md](docs/07-architecture.md).
 
 **Data flows one way.** The submission snapshot is never mutated; extraction
@@ -171,7 +191,7 @@ Tailwind and HTMX CDN scripts fetch.
 ### Running the tests
 
 ```bash
-python -m pytest test_rules.py -q      # 179 passed
+python -m pytest test_rules.py -q      # 224 passed
 ```
 
 No API key, no network, no fixtures, no mocking framework — the payoff of

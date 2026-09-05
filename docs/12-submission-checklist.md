@@ -32,7 +32,7 @@ Verified against a clean checkout on 2026-09-05. Re-run before sending.
 
 ## Testing
 
-- [x] `python -m pytest test_rules.py -q` → **179 passed**
+- [x] `python -m pytest test_rules.py -q` → **224 passed**
 - [x] Passes with `ANTHROPIC_API_KEY=""` — suite is fully offline
 - [x] All 12 rules unit-tested (pass, fail and skip-semantics)
 - [x] Decision precedence, GSTIN checksum, matching thresholds

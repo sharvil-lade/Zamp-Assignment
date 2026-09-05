@@ -1739,3 +1739,382 @@ def test_matching_imports_only_pure_helpers_from_rules():
     src = pathlib.Path("matching.py").read_text(encoding="utf-8")
     assert "from rules import NameVerdict, normalize_name" in src
     assert "decide(" not in src and "rules.decide" not in src
+
+
+# ============================================================================
+# Onboarding cases — employee creates, vendor submits via secure link
+# ============================================================================
+
+def make_case(db, vendor="Sundaram Industrial Supplies LLP",
+              contact="Priya Raghavan", email="priya@sundaramsupplies.in"):
+    token = db.new_token()
+    case_id = db.create_case(vendor, contact, email, token)
+    return case_id, token
+
+
+# --- token generation and storage -------------------------------------------
+
+def test_tokens_are_long_and_unique():
+    import store
+    tokens = {store.new_token() for _ in range(500)}
+    assert len(tokens) == 500
+    assert all(len(t) >= 40 for t in tokens)
+
+
+def test_token_generation_uses_the_secure_generator():
+    import inspect
+    import store
+    src = inspect.getsource(store.new_token)
+    assert "secrets." in src
+    assert "random." not in src              # never the predictable module
+
+
+def test_only_the_token_hash_is_stored(db):
+    case_id, token = make_case(db)
+    case = db.get_case(case_id)
+    assert case["token_hash"] == db.hash_token(token)
+    assert token not in json.dumps(case)     # the raw token is nowhere on the row
+    assert len(case["token_hash"]) == 64     # sha256 hex
+
+
+def test_the_raw_token_is_absent_from_the_database_file(db):
+    import pathlib
+    _, token = make_case(db)
+    blob = pathlib.Path(db.DB_PATH).read_bytes()
+    assert token.encode() not in blob
+
+
+def test_lookup_by_token_finds_only_its_own_case(db):
+    a_id, a_token = make_case(db, "Alpha LLP")
+    b_id, b_token = make_case(db, "Beta LLP")
+    assert db.get_case_by_token(a_token)["id"] == a_id
+    assert db.get_case_by_token(b_token)["id"] == b_id
+    assert db.get_case_by_token(a_token)["vendor_name"] == "Alpha LLP"
+
+
+@pytest.mark.parametrize("bad", ["", "nope", "CASE-0001", "x" * 43, None])
+def test_unknown_tokens_resolve_to_nothing(db, bad):
+    make_case(db)
+    assert db.get_case_by_token(bad) is None
+
+
+def test_a_new_case_starts_awaiting_the_vendor(db):
+    case_id, _ = make_case(db)
+    case = db.get_case(case_id)
+    assert case["status"] == db.AWAITING_VENDOR
+    assert case["run_id"] is None and case["submitted_at"] is None
+
+
+def test_attaching_a_run_moves_the_case_to_processing(db):
+    case_id, _ = make_case(db)
+    run_id = db.create_run("Sundaram", base_submission())
+    db.attach_run_to_case(case_id, run_id)
+    case = db.get_case(case_id)
+    assert case["run_id"] == run_id
+    assert case["status"] == db.PROCESSING
+    assert case["submitted_at"] is not None
+
+
+def test_case_ids_are_sequential(db):
+    assert make_case(db)[0] == "CASE-0001"
+    assert make_case(db)[0] == "CASE-0002"
+
+
+def test_reset_clears_cases_too(db):
+    make_case(db)
+    assert db.list_cases()
+    db.reset_all()
+    assert db.list_cases() == []
+
+
+def test_access_logs_redact_the_token_but_keep_the_route():
+    """The token travels in the URL, so the access log would otherwise record a
+    working credential on every request."""
+    import logging
+    import app
+    _, token = "x", "AbCdEf0123456789_-QwErTyUiOpAsDfGhJkLzXcVbN"
+    rec = logging.LogRecord("uvicorn.access", 20, "", 0,
+                            '%s - "%s %s HTTP/%s" %d %s',
+                            ("127.0.0.1:1", "GET", f"/vendor/onboard/{token}",
+                             "1.1", 200, "OK"), None)
+    app._RedactVendorToken().filter(rec)
+    line = rec.getMessage()
+    assert token not in line
+    assert "/vendor/onboard/<redacted>" in line      # route still legible
+
+
+def test_redaction_leaves_other_paths_alone():
+    import app
+    assert app._redact("GET /dashboard") == "GET /dashboard"
+    assert app._redact("GET /run/VS-0001") == "GET /run/VS-0001"
+
+
+# --- employee: create a case over HTTP ---------------------------------------
+
+def test_employee_can_open_the_new_case_form(client):
+    r = client.get("/onboardings/new")
+    assert r.status_code == 200
+    for field in ("vendor_name", "contact_name", "contact_email"):
+        assert field in r.text
+
+
+def test_employee_creates_a_case_and_gets_a_copyable_link(client, db):
+    r = client.post("/onboardings", data={
+        "vendor_name": "Sundaram Industrial Supplies LLP",
+        "contact_name": "Priya Raghavan",
+        "contact_email": "priya@sundaramsupplies.in"})
+    assert r.status_code == 200
+    assert "Case created" in r.text
+    assert "Copy link" in r.text
+    assert "/vendor/onboard/" in r.text
+
+    cases = db.list_cases()
+    assert len(cases) == 1
+    assert cases[0]["vendor_name"] == "Sundaram Industrial Supplies LLP"
+    assert cases[0]["status"] == db.AWAITING_VENDOR
+
+
+def test_creating_a_case_without_a_vendor_name_is_rejected(client, db):
+    assert client.post("/onboardings", data={"vendor_name": "  "}).status_code == 400
+    assert db.list_cases() == []
+
+
+def test_the_generated_link_actually_works(client, db):
+    import re
+    r = client.post("/onboardings", data={"vendor_name": "Sundaram Industrial Supplies LLP"})
+    url = re.search(r'value="(http[^"]*/vendor/onboard/[^"]+)"', r.text).group(1)
+    path = url.split("testserver", 1)[-1]
+    assert client.get(path).status_code == 200
+
+
+# --- vendor portal: access control -------------------------------------------
+
+def test_vendor_link_opens_the_form(client, db):
+    _, token = make_case(db)
+    r = client.get(f"/vendor/onboard/{token}")
+    assert r.status_code == 200
+    assert "Sundaram Industrial Supplies LLP" in r.text
+    for field in rules.SUBMISSION_FIELDS:
+        assert f'name="{field}"' in r.text
+    for doc in ("incorporation_certificate", "bank_proof", "insurance_certificate"):
+        assert f'name="{doc}"' in r.text
+
+
+@pytest.mark.parametrize("bad", [
+    "deadbeef", "CASE-0001", "x" * 43, "' OR 1=1 --",
+    "%2e%2e%2f%2e%2e%2fdashboard", "..%2F..%2Fdashboard", "....//dashboard",
+])
+def test_an_invalid_token_is_404(client, db, bad):
+    """Covers guesses, case ids, injection and every traversal form that actually
+    reaches the server. A literal `../../x` is resolved by the HTTP client before
+    the request is sent, so it never reaches this route at all."""
+    make_case(db)
+    assert client.get(f"/vendor/onboard/{bad}").status_code == 404
+
+
+def test_a_vendor_token_reaches_only_its_own_case(client, db):
+    make_case(db, "Alpha Industries LLP")
+    _, b_token = make_case(db, "Beta Logistics LLP")
+    body = client.get(f"/vendor/onboard/{b_token}").text
+    assert "Beta Logistics LLP" in body
+    assert "Alpha Industries LLP" not in body
+
+
+def test_case_ids_are_never_accepted_as_authorisation(client, db):
+    """The only key is the token. A known case id must open nothing."""
+    case_id, _ = make_case(db)
+    assert client.get(f"/vendor/onboard/{case_id}").status_code == 404
+    assert client.post(f"/vendor/onboard/{case_id}", data={}).status_code == 404
+
+
+def test_vendor_pages_never_expose_internal_surfaces(client, db):
+    _, token = make_case(db)
+    body = client.get(f"/vendor/onboard/{token}").text
+    for leak in ("/dashboard", "/run/", "/reset", "Decision Engine",
+                 "Load sample", "Finding", "BLOCK", "R01", "Audit"):
+        assert leak not in body, leak
+
+
+# --- vendor submission --------------------------------------------------------
+
+def vendor_post(client, token, overrides=None, files=None):
+    data = dict(base_submission())
+    data.update(overrides or {})
+    return client.post(f"/vendor/onboard/{token}", data=data,
+                       files=files or {}, follow_redirects=False)
+
+
+def test_vendor_submits_and_is_redirected_to_confirmation(client, db, monkeypatch):
+    import pipeline
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: "APPROVED")
+    _, token = make_case(db)
+
+    r = vendor_post(client, token)
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/vendor/onboard/{token}/submitted"
+
+    page = client.get(f"/vendor/onboard/{token}/submitted")
+    assert "Submission received" in page.text
+    assert "being reviewed" in page.text
+
+
+def test_submission_creates_a_run_and_binds_it_to_the_case(client, db, monkeypatch):
+    import pipeline
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: "APPROVED")
+    case_id, token = make_case(db)
+    vendor_post(client, token)
+
+    case = db.get_case(case_id)
+    assert case["status"] == db.PROCESSING
+    assert case["run_id"] is not None
+    run = db.get_run(case["run_id"])
+    assert run["submission"]["gstin"] == base_submission()["gstin"]
+    assert run["submission"]["pan"] == base_submission()["pan"]
+
+
+def test_submission_triggers_the_existing_pipeline(client, db, monkeypatch):
+    import pipeline
+    called = []
+    monkeypatch.setattr(pipeline, "run",
+                        lambda run_id, **k: called.append(run_id) or "APPROVED")
+    case_id, token = make_case(db)
+    vendor_post(client, token)
+    assert called == [db.get_case(case_id)["run_id"]]
+
+
+def test_submission_records_a_vendor_event_without_the_token(client, db, monkeypatch):
+    import pipeline
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: "APPROVED")
+    case_id, token = make_case(db)
+    vendor_post(client, token)
+
+    events = db.get_events(db.get_case(case_id)["run_id"])
+    submitted = [e for e in events if e["event_type"] == "vendor_submitted"]
+    assert len(submitted) == 1 and submitted[0]["actor"] == "vendor"
+    assert json.loads(submitted[0]["detail_json"])["case_id"] == case_id
+    assert token not in json.dumps([dict(e) for e in events])
+
+
+def test_a_blank_vendor_submission_is_stored_not_500(client, db, monkeypatch):
+    """Invalid data becomes findings, exactly as on the internal form."""
+    import pipeline
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: "PENDING")
+    case_id, token = make_case(db)
+    r = client.post(f"/vendor/onboard/{token}",
+                    data={f: "" for f in rules.SUBMISSION_FIELDS},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    run = db.get_run(db.get_case(case_id)["run_id"])
+    assert run["submission"]["legal_entity_name"] == ""
+
+
+def test_vendor_uploads_use_the_existing_validation(client, db, monkeypatch):
+    import pipeline
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: "PENDING")
+    case_id, token = make_case(db)
+    vendor_post(client, token, files={
+        "bank_proof": ("cheque.exe", b"MZ-not-a-pdf", "application/octet-stream"),
+        "incorporation_certificate": ("cert.pdf", GOOD_PDF, "application/pdf")})
+
+    run_id = db.get_case(case_id)["run_id"]
+    saved = db.saved_documents(run_id)
+    assert "bank_proof" not in saved            # refused
+    assert "incorporation_certificate" in saved  # accepted
+    rejected = [json.loads(e["detail_json"]) for e in db.get_events(run_id)
+                if e["event_type"] == "upload_rejected"]
+    assert len(rejected) == 1
+    assert rejected[0]["document"] == "bank_proof"
+    assert "not a supported file type" in rejected[0]["reason"]
+
+
+def test_a_link_can_only_be_submitted_once(client, db, monkeypatch):
+    import pipeline
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: "APPROVED")
+    _, token = make_case(db)
+    assert vendor_post(client, token).status_code == 303
+    assert vendor_post(client, token).status_code == 409
+    assert len(db.list_runs()) == 1             # no second run started
+
+
+def test_revisiting_a_submitted_link_shows_confirmation_not_the_form(client, db,
+                                                                    monkeypatch):
+    import pipeline
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: "APPROVED")
+    _, token = make_case(db)
+    vendor_post(client, token)
+    body = client.get(f"/vendor/onboard/{token}").text
+    assert "already submitted" in body
+    assert 'name="gstin"' not in body
+
+
+def test_confirmation_page_leaks_no_decision_information(client, db, monkeypatch):
+    """The vendor learns their submission arrived. Nothing else."""
+    import pipeline
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: "REJECTED")
+    case_id, token = make_case(db)
+    vendor_post(client, token)
+    db.set_status(db.get_case(case_id)["run_id"], "REJECTED")
+    db.add_findings(db.get_case(case_id)["run_id"], [
+        {"rule_id": "R09", "severity": "BLOCK", "stage": "consistency",
+         "message": "Bank account is held in a different name"}])
+
+    body = client.get(f"/vendor/onboard/{token}/submitted").text
+    for leak in ("REJECTED", "BLOCK", "R09", "Bank account is held",
+                 "/run/", "/dashboard", "finding"):
+        assert leak not in body, leak
+
+
+# --- employee monitoring ------------------------------------------------------
+
+def test_dashboard_lists_a_new_case_as_awaiting_vendor(client, db):
+    make_case(db, "Sundaram Industrial Supplies LLP")
+    body = client.get("/dashboard").text
+    assert "CASE-0001" in body
+    assert "Sundaram Industrial Supplies LLP" in body
+    assert "Awaiting vendor" in body
+
+
+def test_dashboard_shows_the_case_after_submission(client, db, monkeypatch):
+    import pipeline
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: "APPROVED")
+    case_id, token = make_case(db)
+    vendor_post(client, token)
+    run_id = db.get_case(case_id)["run_id"]
+    db.set_status(run_id, "APPROVED", 4321)
+
+    body = client.get("/dashboard").text
+    assert "CASE-0001" in body
+    assert f"/run/{run_id}" in body             # clicking opens the run detail
+    assert "Awaiting vendor" not in body
+
+
+def test_list_cases_reports_stage_findings_and_last_activity(db, monkeypatch):
+    import pipeline
+    case_id, _ = make_case(db)
+    run_id = db.create_run("Sundaram", base_submission(contact_phone=""))
+    db.attach_run_to_case(case_id, run_id)
+    attach(db, run_id, *FAKE_DOCS)
+    pipeline.run(run_id, today=TODAY, extract_fn=fake_extractor(),
+                 draft_fn=fake_drafter())
+
+    row = db.list_cases()[0]
+    assert row["run_status"] == "PENDING"
+    assert row["finding_count"] == 1
+    assert row["current_stage"] == "run"        # last event is run_finished
+    assert row["last_activity"]
+
+
+def test_the_existing_internal_submit_flow_still_works(client, db):
+    """Employee direct submission is untouched by the vendor portal."""
+    r = client.post("/submit", json=base_submission())
+    assert r.status_code == 200
+    assert r.json()["status"] == "APPROVED"
+    assert db.list_cases() == []                # no case needed for direct submit
+
+
+def test_employee_and_vendor_routes_are_separated(client, db):
+    _, token = make_case(db)
+    employee = ["/dashboard", "/onboardings/new", "/"]
+    for path in employee:
+        assert "Decision Engine" in client.get(path).text
+    assert "Decision Engine" not in client.get(f"/vendor/onboard/{token}").text

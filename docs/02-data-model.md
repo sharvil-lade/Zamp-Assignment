@@ -106,7 +106,7 @@ missing document is reported.
 
 **Skip semantics.** A rule whose inputs are absent emits **nothing**. The absence is already reported by R01/R02; a rule must never double-report it. Example: if `incorporation_certificate` is missing, R02 fires and R12 stays silent.
 
-## Persistence — 3 tables (SQLite)
+## Persistence — 4 tables (SQLite)
 
 ```sql
 CREATE TABLE runs (
@@ -147,6 +147,27 @@ CREATE TABLE events (            -- append-only. never UPDATE, never DELETE.
   duration_ms INTEGER
 );
 ```
+
+```sql
+CREATE TABLE onboarding_cases (   -- added by the vendor-portal layer
+  id            TEXT PRIMARY KEY,      -- 'CASE-0001'
+  run_id        TEXT REFERENCES runs(run_id),   -- NULL until the vendor submits
+  vendor_name   TEXT NOT NULL,
+  contact_name  TEXT,
+  contact_email TEXT,
+  token_hash    TEXT NOT NULL UNIQUE,  -- sha256 of the link token, never the token
+  status        TEXT NOT NULL,         -- AWAITING_VENDOR | PROCESSING
+  created_at    TEXT NOT NULL,
+  submitted_at  TEXT
+);
+```
+
+**A case exists before a run does.** The employee creates the case; the vendor fills it in later.
+`run_id` is therefore NULL until submission, at which point the existing pipeline takes over
+completely unchanged. `runs`, `findings` and `events` were not modified.
+
+**Only the token hash is stored.** A database leak yields no working links, and the raw token is
+returned to the employee exactly once — on the page that mints it.
 
 `followup_draft` holds the vendor-facing text and is NULL unless a draft was created.
 `followup_sent_at` is NULL until a human clicks send — **that column is the entire human gate**,

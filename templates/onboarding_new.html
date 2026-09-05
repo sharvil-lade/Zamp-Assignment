@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}New onboarding · Vendor Onboarding{% endblock %}
+
+{% block content %}
+<h1 class="text-xl font-semibold tracking-tight">New onboarding case</h1>
+<p class="mt-1 text-sm text-slate-500">
+  Create a case and send the vendor a secure link. They fill in their own details;
+  the checks run automatically when they submit.
+</p>
+
+<form method="post" action="/onboardings" class="mt-8 max-w-xl space-y-6">
+  <section class="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
+    <div>
+      <label for="vendor_name" class="block text-sm text-slate-600">
+        Vendor / company name <span class="text-red-500">*</span>
+      </label>
+      <input id="vendor_name" name="vendor_name" type="text" required autocomplete="off"
+             placeholder="Sundaram Industrial Supplies LLP"
+             class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+    </div>
+    <div>
+      <label for="contact_name" class="block text-sm text-slate-600">Vendor contact name</label>
+      <input id="contact_name" name="contact_name" type="text" autocomplete="off"
+             placeholder="Priya Raghavan"
+             class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+    </div>
+    <div>
+      <label for="contact_email" class="block text-sm text-slate-600">Vendor email</label>
+      <input id="contact_email" name="contact_email" type="email" autocomplete="off"
+             placeholder="priya@sundaramsupplies.in"
+             class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
+    </div>
+  </section>
+
+  <div class="flex items-center gap-4">
+    <button type="submit"
+            class="rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white
+                   hover:bg-slate-700">Create case and generate link</button>
+    <span class="text-sm text-slate-400">These details pre-fill the vendor's form.</span>
+  </div>
+</form>
+{% endblock %}

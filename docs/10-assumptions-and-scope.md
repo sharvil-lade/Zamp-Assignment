@@ -17,6 +17,8 @@ The case study says: *"treat ambiguity as part of the exercise. Make an assumpti
 | A9 | A **~400 ms per-stage pause** is intentional | Demo legibility. Marked in code as removable. |
 | A10 | Thresholds 0.92 / 0.75 / 0.70 are **tuned once against the sample set** | Four numbers nobody will change do not need a config system. |
 | A12 | A **refused attachment counts as "not attached"** | The brief names "vendors attach the wrong documents" as a normal case, so it must be a fixable finding (R02), not a failed run. |
+| A14 | **The vendor link is the whole authentication** for a vendor | No account, no password, no email round-trip. The token is 32 random bytes, single-use, and scoped to one case — appropriate for an MVP where the alternative is a full identity system. Expiry is the obvious next control. |
+| A15 | **The employee side still has no authentication** | Unchanged from A4. The vendor portal is isolated *from* the employee surface, but `/dashboard` is not yet protected *from anyone* — that is P1 in the production table below. |
 | A13 | **Reviewer identity is a free-text field** | Follows from A4. Real auth is the first thing production adds — see `13-deployment-plan.md`. |
 | A11 | The **PDF is the source of truth over the form** where they disagree | A document is harder to fabricate casually than a text input. This is why R09/R10/R12 compare extracted values against typed ones and not the reverse. |
 
@@ -88,6 +90,10 @@ Not a security product, but the obvious boundaries are held:
 | **No secrets in source** | Asserted by a test that scans every shipped module and template |
 | **`.gitignore`** | `.env`, `vendor.db`, `uploads/`, caches and Python artifacts; `.env.example` stays committed |
 | **Error surfaces** | Browsers get a readable page, API clients get JSON. No traceback ever reaches a response |
+| **Vendor link tokens** | `secrets.token_urlsafe(32)`; only `sha256(token)` is stored. Lookup is by hash — a case id is never accepted as authorisation |
+| **Token never logged** | It travels in the URL, so a `logging.Filter` rewrites `/vendor/onboard/<token>` to `/vendor/onboard/<redacted>` in uvicorn's access and error logs |
+| **One link, one submission** | A submitted case returns 409 on replay, so a leaked link cannot start a second run |
+| **Vendor surface isolation** | Vendor pages extend `vendor_base.html`, which has no nav, no dashboard link and no Reset. Confirmation shows no status, findings, rules or run id |
 
 **A rejected attachment does not fail the run.** "Vendors attach the wrong documents" is in the
 problem statement, so it must be a *fixable finding*: the file is not saved, R02 reports the

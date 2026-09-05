@@ -4,8 +4,10 @@ Schema is defined in docs/02-data-model.md: exactly three tables.
 No business logic lives here — see docs/07-architecture.md.
 """
 
+import hashlib
 import json
 import re
+import secrets
 import shutil
 import sqlite3
 from contextlib import contextmanager
@@ -53,6 +55,21 @@ CREATE TABLE IF NOT EXISTS events (
   actor       TEXT NOT NULL,
   detail_json TEXT,
   duration_ms INTEGER
+);
+
+-- An onboarding case exists BEFORE any run does: the employee creates it, the
+-- vendor fills it in later. `run_id` is therefore NULL until the vendor submits,
+-- at which point the existing PS-2 pipeline takes over unchanged.
+CREATE TABLE IF NOT EXISTS onboarding_cases (
+  id            TEXT PRIMARY KEY,      -- 'CASE-0001'
+  run_id        TEXT REFERENCES runs(run_id),
+  vendor_name   TEXT NOT NULL,
+  contact_name  TEXT,
+  contact_email TEXT,
+  token_hash    TEXT NOT NULL UNIQUE,  -- sha256 of the link token; never the token
+  status        TEXT NOT NULL,         -- AWAITING_VENDOR | PROCESSING
+  created_at    TEXT NOT NULL,
+  submitted_at  TEXT
 );
 """
 
@@ -244,6 +261,95 @@ def saved_documents(run_id: str) -> dict[str, Path]:
     return {p.stem: p for p in sorted(d.iterdir())} if d.exists() else {}
 
 
+# --- onboarding cases -------------------------------------------------------
+
+AWAITING_VENDOR = "AWAITING_VENDOR"
+PROCESSING = "PROCESSING"
+
+
+def new_token() -> str:
+    """A vendor link token. Cryptographically secure and unguessable."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    """Only the hash is ever stored, so a database leak yields no working links."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _next_case_id(conn) -> str:
+    row = conn.execute(
+        "SELECT id FROM onboarding_cases ORDER BY id DESC LIMIT 1").fetchone()
+    n = int(row["id"].split("-")[1]) + 1 if row else 1
+    return f"CASE-{n:04d}"
+
+
+def create_case(vendor_name: str, contact_name: str, contact_email: str,
+                token: str) -> str:
+    """Create a case awaiting the vendor. Stores the token's hash, never the token."""
+    with _conn() as conn:
+        case_id = _next_case_id(conn)
+        conn.execute(
+            "INSERT INTO onboarding_cases (id, vendor_name, contact_name,"
+            " contact_email, token_hash, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (case_id, vendor_name, contact_name, contact_email,
+             hash_token(token), AWAITING_VENDOR, _now()),
+        )
+        return case_id
+
+
+def get_case_by_token(token: str) -> dict | None:
+    """The vendor's only authorisation path. Never look a case up by id for them."""
+    if not token:
+        return None
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM onboarding_cases WHERE token_hash = ?",
+                           (hash_token(token),)).fetchone()
+    return dict(row) if row else None
+
+
+def get_case(case_id: str) -> dict | None:
+    """Employee-side lookup by id. Not reachable from a vendor request."""
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM onboarding_cases WHERE id = ?",
+                           (case_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def attach_run_to_case(case_id: str, run_id: str) -> None:
+    """Vendor has submitted: bind the case to its run and move it to PROCESSING."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE onboarding_cases SET run_id = ?, status = ?, submitted_at = ?"
+            " WHERE id = ?",
+            (run_id, PROCESSING, _now(), case_id))
+
+
+def list_cases() -> list[dict]:
+    """Newest first, joined to the run so the dashboard needs one query.
+
+    `run_status` / `finding_count` / `last_activity` are NULL while the case is
+    still awaiting the vendor — there is no run yet.
+    """
+    sql = """
+      SELECT c.*,
+             r.status      AS run_status,
+             r.duration_ms AS run_duration_ms,
+             (SELECT COUNT(*) FROM findings f WHERE f.run_id = c.run_id)
+               AS finding_count,
+             (SELECT e.stage FROM events e WHERE e.run_id = c.run_id
+               ORDER BY e.id DESC LIMIT 1) AS current_stage,
+             (SELECT e.ts FROM events e WHERE e.run_id = c.run_id
+               ORDER BY e.id DESC LIMIT 1) AS last_activity
+      FROM onboarding_cases c
+      LEFT JOIN runs r ON r.run_id = c.run_id
+      ORDER BY c.id DESC
+    """
+    with _conn() as conn:
+        return [dict(row) for row in conn.execute(sql)]
+
+
 # --- demo reset -------------------------------------------------------------
 
 def reset_all() -> None:
@@ -251,6 +357,7 @@ def reset_all() -> None:
     with _conn() as conn:
         conn.execute("DELETE FROM events")
         conn.execute("DELETE FROM findings")
+        conn.execute("DELETE FROM onboarding_cases")
         conn.execute("DELETE FROM runs")
     if UPLOAD_DIR.exists():
         shutil.rmtree(UPLOAD_DIR)

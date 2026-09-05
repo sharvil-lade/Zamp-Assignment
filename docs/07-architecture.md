@@ -31,7 +31,12 @@ vendor-onboarding/
 │   ├── _run_body.html    the polled fragment — stages, findings, comparison,
 │   │                     timeline, draft box. Swapped whole, so polling stops
 │   │                     by simply not re-rendering the hx-trigger.
-│   └── dashboard.html
+│   ├── dashboard.html      cases + runs
+│   ├── onboarding_new.html    employee: create a case
+│   ├── onboarding_created.html employee: the copyable vendor link
+│   ├── vendor_base.html      vendor shell — deliberately NOT base.html
+│   ├── vendor_form.html      vendor: fields from rules.py, not a second schema
+│   └── vendor_submitted.html vendor: confirmation, nothing else
 ├── samples/
 │   ├── make_pdfs.py     regenerates pdfs/ (reportlab)
 │   ├── make_fixtures.py regenerates the 4 scenario JSONs (computes the GSTIN)
@@ -88,6 +93,18 @@ POST /submit  (multipart: `submission` JSON field + 3 optional file fields,
               |                       + add_event(decision, rule_ids)
               +- [7] communicate   -> draft email if PENDING -> store.set_draft()
 
+EMPLOYEE
+GET  /onboardings/new     create-a-case form
+POST /onboardings         mint case + secure link (raw token shown once)
+GET  /dashboard?status=   cases table + runs table
+GET  /run/{id}...         the existing run views
+
+VENDOR  (token is the only authorisation; case ids are never accepted)
+GET  /vendor/onboard/{token}            the vendor's own form
+POST /vendor/onboard/{token}            submit -> creates run -> pipeline
+GET  /vendor/onboard/{token}/submitted  confirmation only
+
+INTERNAL / DEMO
 GET  /                    submit form (14 fields, 3 uploads, sample dropdown)
 GET  /samples/{name}      one scenario fixture as JSON (fills the form)
 POST /submit              multipart -> background run + 303 to /run/{id}
