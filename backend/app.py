@@ -26,12 +26,25 @@ BASE_DIR = Path(__file__).parent
 DIST = config.PROJECT_ROOT / "frontend" / "dist"
 
 
+# Why this is not just `raise`: on a serverless platform a startup exception is
+# an opaque 500 with the reason buried in a log nobody is looking at. Recording
+# it and answering every request with it costs fifteen lines and turns "the
+# function crashed" into "APP_PASSWORD is not set".
+STARTUP_ERROR: str | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global STARTUP_ERROR
+    log = logging.getLogger("uvicorn.error")
+
     problems = config.verify()
     if problems:
-        raise RuntimeError("Refusing to start: " + "; ".join(problems))
-    log = logging.getLogger("uvicorn.error")
+        STARTUP_ERROR = "; ".join(problems)
+        log.error("config: refusing to serve — %s", STARTUP_ERROR)
+        yield
+        return
+
     log.info("config: %s", config.summary())
     for warning in config.warnings():
         log.warning("config: %s", warning)
@@ -41,7 +54,8 @@ async def lifespan(app: FastAPI):
     try:
         store.init_db()
     except Exception as exc:
-        raise RuntimeError(_db_help(exc)) from None
+        STARTUP_ERROR = _db_help(exc)
+        log.error("config: %s", STARTUP_ERROR)
     yield
 
 
@@ -99,6 +113,14 @@ for _name in ("uvicorn.access", "uvicorn.error"):
 app = FastAPI(title="Vendor Onboarding Decision Engine", lifespan=lifespan)
 
 app.include_router(api.router)
+
+
+@app.middleware("http")
+async def refuse_while_misconfigured(request: Request, call_next):
+    """Answer every request with the reason, rather than failing silently."""
+    if STARTUP_ERROR:
+        return JSONResponse({"detail": STARTUP_ERROR}, status_code=503)
+    return await call_next(request)
 
 # The React dev server runs on a different origin. The credential is a Bearer
 # header rather than a cookie, so `allow_credentials` stays off — there is

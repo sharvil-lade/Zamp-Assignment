@@ -3032,15 +3032,17 @@ def test_there_is_no_execution_mode_to_configure():
 
 def test_vercel_config_is_present_and_points_at_the_asgi_app():
     cfg = json.loads(repo("vercel.json").read_text(encoding="utf-8"))
-    fn = cfg["functions"]["api/index.py"]
+    fn = cfg["functions"]["api/[...path].py"]
 
     # The pipeline runs inside the request: five model calls, tens of seconds.
     # Vercel's 10s default would abort every real submission.
     assert fn["maxDuration"] >= 60
-    # The React bundle lives outside the entrypoint's tree, so it has to be
-    # named explicitly or the function ships without a UI.
-    assert fn["includeFiles"].startswith("frontend/dist")
-    assert cfg["rewrites"][0]["destination"] == "/api/index"
+    # A catch-all function filename means `/api/**` reaches it by filesystem
+    # routing with the path intact. A rewrite would hand it the *rewritten*
+    # path, and every route would 404.
+    assert not any(r["destination"].startswith("/api")
+                   for r in cfg["rewrites"]), "the API must not be rewritten"
+    assert cfg["rewrites"][0]["destination"] == "/index.html"
     # `builds` and `functions` are mutually exclusive - having both fails the
     # deploy outright.
     assert "builds" not in cfg
@@ -3048,7 +3050,7 @@ def test_vercel_config_is_present_and_points_at_the_asgi_app():
 
 def test_the_serverless_entrypoint_is_the_same_app_as_local():
     """No second application, no Vercel-only behaviour."""
-    src = repo("api", "index.py").read_text(encoding="utf-8")
+    src = repo("api", "[...path].py").read_text(encoding="utf-8")
     assert "from app import app" in src
     assert "backend" in src
 
