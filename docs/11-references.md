@@ -46,7 +46,7 @@ GSTIN structure: 2-digit state code, 10-character PAN at positions 3–12, regis
 PAN extraction from GSTIN, and the PAN 4th-character entity-type code (`C` company, `F` firm/LLP, `P` individual, `T` trust, `H` HUF).
 → Supports R06, R07
 
-These two references between them produce the strongest demo moment in the build: three independent contradictions derived from one 15-character string with zero external calls.
+These two references between them produce the strongest demo moment in the build: one changed PAN character contradicted four independent ways — by the GSTIN the vendor typed, by the entity type they declared, and by the PAN card and GST certificate they uploaded — all derived from one 15-character string with zero external calls.
 
 ## Supporting the deferred list
 

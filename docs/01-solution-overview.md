@@ -14,24 +14,28 @@ A procurement team receives dozens of new vendor submissions a quarter. Each one
 
 The expensive failure is not an incomplete form. It is a submission that looks complete and is internally inconsistent — a bank account in a different name, a tax ID that contradicts the declared jurisdiction or legal form. Those pass a completeness check and cause payment fraud.
 
-**What we build:** a process that takes a submission (form + 3 documents), produces **Approved / Pending / Rejected** with every reason visible, drafts the follow-up for anything recoverable, and leaves an immutable audit record of how it got there.
+**What we build:** a process that takes a submission (form + up to 5 documents), produces **Approved / Pending / Rejected** with every reason visible, drafts the follow-up for anything recoverable, and leaves an immutable audit record of how it got there.
 
-## The 7-stage workflow
+## The 8-stage workflow
 
 | # | Stage | Does | Nature |
 |---|---|---|---|
-| 1 | **Intake** | Persist submission + files, assign `VS-####`, snapshot input | Deterministic |
-| 2 | **Completeness** | Required fields and documents present (R01, R02) | Deterministic |
-| 3 | **Extraction** | Each PDF to structured JSON | **AI** |
-| 4 | **Format & checksum** | PAN, GSTIN mod-36, IFSC (R03–R05) | Deterministic |
-| 5 | **Consistency** | Field-vs-field and document-vs-form (R06–R12) | Deterministic + **AI at the margin** |
+| 1 | **Submission received** | Persist submission + files, assign `VS-####`, snapshot input | Deterministic |
+| 2 | **Checking completeness** | Required fields and documents present (R01, R02) | Deterministic |
+| 3 | **Extracting documents** | Each PDF to structured JSON | **AI** |
+| 4 | **Validating formats** | PAN, GSTIN mod-36, IFSC (R03–R05); and each document as an artefact — right kind, readable, well-formed registration number (R13, R14, R17) | Deterministic |
+| 5 | **Cross-checking information** | Field-vs-field and document-vs-form (R06–R10, R12, R15, R16, R18) | Deterministic + **AI at the margin** |
 | 6 | **Decision** | Derive status from accumulated findings | Deterministic |
-| 7 | **Communicate** | Draft the vendor follow-up | **AI**, human-gated |
+| 7 | **AI Employee review** | Risk, summary, key points, recommendation | **AI**, advisory |
+| 8 | **Preparing communication** | Draft the vendor follow-up | **AI**, human-gated |
+
+Stage 7 runs *after* the decision is persisted and cannot change it — see
+`15-ai-employee.md`.
 
 ## End-to-end flow
 
 ```
-  Vendor submission (14 fields + 3 PDFs)
+  Vendor submission (15 fields + up to 5 PDFs)
             |
         [1] Intake --------------------> run created, status=RUNNING
             |
@@ -39,14 +43,16 @@ The expensive failure is not an incomplete form. It is a submission that looks c
             |
         [3] Extraction  (Claude) ------> extracted{} persisted
             |
-        [4] Format & checksum ---------> findings[]
+        [4] Format & documents --------> findings[]
             |
         [5] Consistency ---------------> findings[]
             |     +-- ambiguous name pair? -> Claude -> {same_entity, confidence, reason}
             |
         [6] Decision  decide(findings) -> APPROVED | PENDING | REJECTED
-            |
-        [7] Communicate (Claude) ------> draft email --+
+            |                              (persisted before anything AI runs)
+        [7] AI Employee review --------> risk · summary · recommendation
+            |                            advisory; cannot change the status
+        [8] Communicate (Claude) ------> draft email --+
             |                                          |
             v                                          v
     every stage appends to events[]           human clicks Send/Copy
@@ -65,13 +71,20 @@ Consequences, all free:
 
 ## AI vs deterministic responsibilities
 
-### AI does exactly three things
+### One AI Employee, four places it acts
+
+`ai_employee.py` orchestrates every AI capability. It has no database handle, no
+shell and no arbitrary tools — see `15-ai-employee.md`.
 
 | Where | Why it must be AI |
 |---|---|
 | **Document extraction** (stage 3) | Vendors format documents however they like. No rule reads an arbitrary PDF. |
 | **Ambiguous name matching** (stage 5) | `Acme Technologies Pvt Ltd` vs `Acme Tech Private Limited` — only inside a measured ambiguity band; ~90% of comparisons never reach a model. |
-| **Follow-up drafting** (stage 7) | Deterministic input (the finding list), natural-language output, zero influence on the decision. |
+| **Review, summary, recommendation** (stage 7) | Reads the already-decided run and briefs the reviewer in plain language. |
+| **Follow-up drafting** (stage 8) | Deterministic input (the finding list), natural-language output, zero influence on the decision. |
+
+**Risk is deterministic**, not a model judgement: BLOCK → High, FIX → Medium,
+none → Low. Only the rationale around it is written.
 
 ### Deterministic does everything else
 
@@ -83,6 +96,9 @@ A rule is testable, repeatable, instant, free, and its output is a sentence a pr
 
 - `rules.py` has **no network imports** and no I/O.
 - `decide()` takes **only** a list of findings and returns a string.
+- `ai_employee.py` imports nothing but `json`, `time`, `dataclasses`, `extract`
+  and `rules` — asserted by a test. It cannot reach `store`, a shell, or a driver.
+- The decision is persisted *before* the review stage begins.
 
 The model *cannot* reach the decision. That is a property of the file layout, which is a much stronger answer than "I chose not to." See `05-ai-design.md`.
 

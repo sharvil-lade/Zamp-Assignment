@@ -1,12 +1,14 @@
 fastapi
 uvicorn[standard]
-jinja2
 python-multipart
+python-dotenv
 anthropic
+httpx
+psycopg[binary]
 
 # tests
 pytest
-httpx           # required by fastapi.testclient
+pglast          # validates the Postgres SQL offline, no server needed
 
 # reportlab is only needed to regenerate samples/pdfs/ via samples/make_pdfs.py;
 # the committed PDFs mean the app itself never imports it.

@@ -1,0 +1,30 @@
+{
+  "label": "EC-2 \u00b7 Incomplete submission",
+  "expected_status": "PENDING",
+  "expected_rules": [
+    "R01",
+    "R02"
+  ],
+  "documents": {
+    "pan_card": "pan_card.pdf",
+    "gst_certificate": "gst_certificate.pdf",
+    "bank_proof": "bank_proof.pdf"
+  },
+  "submission": {
+    "legal_entity_name": "Sundaram Industrial Supplies LLP",
+    "entity_type": "LLP",
+    "country_of_incorporation": "IN",
+    "registered_address": "42 Industrial Layout, Koramangala, Bengaluru",
+    "registered_address_state": "Karnataka",
+    "contact_name": "Priya Raghavan",
+    "contact_email": "priya@sundaramsupplies.in",
+    "contact_phone": "",
+    "tax_id_type": "GSTIN",
+    "gstin": "29ABCFS1234K1Z3",
+    "pan": "ABCFS1234K",
+    "account_holder_name": "Sundaram Industrial Supplies LLP",
+    "account_number": "50200071234567",
+    "ifsc": "HDFC0001234",
+    "bank_name": "HDFC Bank"
+  }
+}

@@ -23,6 +23,11 @@ venv/
 .DS_Store
 Thumbs.db
 
-# scratch
+# scratch — ad-hoc verification scripts, never part of the submission
 server.log
 *.tmp
+_*.py
+backend/_*.py
+
+# the case-study brief itself — reference material, not part of the submission
+asa-case-study-candidate*.pdf

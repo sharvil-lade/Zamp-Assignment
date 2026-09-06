@@ -31,7 +31,7 @@ Precedence is BLOCK over FIX: a submission with one fraud signal and four missin
 
 **3. It is auditable and re-runnable.** Because `decide()` reads only stored findings, a rule change can be re-evaluated against every historical run without re-reading a PDF or spending a token.
 
-**4. It is testable without mocking.** `test_rules.py` asserts on statuses with no fixtures, no network, no model. Twenty asserts, sub-second.
+**4. It is testable without mocking.** The rule tests assert on statuses with no fixtures, no network, no model. Sub-second, every time.
 
 **5. It is explainable to a non-technical buyer** — one of the three stated grading criteria. "It was rejected because the PAN embedded in the GSTIN doesn't match the PAN they typed" is a sentence a procurement lead acts on. "The model scored it 0.31" is not.
 

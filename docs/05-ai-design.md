@@ -8,32 +8,57 @@ AI appears in exactly **three** places. Each is justified by a rule not being ab
 
 **Why AI:** vendors format documents however they like. No rule reads an arbitrary cancelled cheque. This is the one genuinely unsolvable-by-rules step in the whole process.
 
-**Implementation** (`extract.py`):
+**Implementation** (`extract.py`): one schema and one prompt per document type, one call each.
 
 ```python
-resp = client.messages.create(
+resp = client().messages.create(
     model="claude-opus-5",
     max_tokens=2000,
     output_config={
         "effort": "low",
-        "format": {"type": "json_schema", "schema": BANK_PROOF_SCHEMA},
+        "format": {"type": "json_schema", "schema": SCHEMAS[doc_type]},
     },
     messages=[{"role": "user", "content": [
         {"type": "document", "source": {"type": "base64",
                                         "media_type": "application/pdf", "data": b64}},
-        {"type": "text", "text": "Extract account holder name, account number, IFSC, "
-                                 "and bank name. Use null for anything not present. "
-                                 "Do not infer or correct values."},
+        {"type": "text", "text": PROMPTS[doc_type]},
     ]}],
 )
 ```
+
+`SCHEMAS` and `PROMPTS` are keyed by the same five document types the form collects, and
+`_nullable()` builds every schema so that **every field is `["string", "null"]` and every field is
+required**. The model must answer for each key; it may answer `null`. That is a different
+guarantee from an optional field, and it is the one that makes absence a fact rather than an
+omission.
+
+Every prompt is assembled from three pieces, and the order matters:
+
+1. **What we expect** — *"This should be an Indian PAN card."* Stated once, as context.
+2. **What is it actually?** — the shared `_WHAT_IS_IT` block, which asks the model to name the
+   document in a few plain lowercase words *taken from its own heading*, and says explicitly:
+   *"Report what the document says it is even if that is not what was expected."*
+3. **The fields**, then the shared `_TRANSCRIBER_RULES`.
+
+Putting `document_type` first is deliberate. If the model is asked to find a PAN before it is
+asked what it is looking at, the answer to "what is this?" arrives already coloured by what we
+were hoping to find. Asking in the other order costs nothing and keeps R13's input honest.
 
 Design notes:
 
 - **No OCR library.** Claude takes PDFs natively as `document` blocks. No Tesseract, no poppler, no `pdf2image`, no preprocessing. Scanned images use an identical call with an `image` block, so "scanned vs. digital" never becomes a branch in our code.
 - **Structured outputs** (`output_config.format`) guarantee the shape — no defensive JSON parsing, no retry-on-malformed-JSON loop.
 - **`effort: "low"`** — extraction is transcription, not reasoning. The cost lever applied where it costs nothing.
-- **"Do not infer or correct values"** is load-bearing. If the model silently normalises `ABCDE1234K` to the PAN it saw elsewhere, R06 stops working. The extractor must be a faithful transcriber, not a helpful one.
+- **"Never infer, correct, complete, normalise or guess"** is load-bearing, not politeness. If the
+  model silently normalises the PAN on a card to the one it saw on the GST certificate in the same
+  run, R06 and R15 stop working and the engine starts approving forged submissions. The extractor
+  must be a faithful transcriber, not a helpful one — the prompt says outright that *an honest null
+  is always better than a plausible guess*.
+- **`document_type` is transcription too.** Every schema carries it, and the model is only ever
+  asked what the paper calls itself. It is never asked whether the document is in the right slot,
+  whether the vendor is trying something, or what should happen next. R13 makes that judgment, in
+  `rules.py`, against a keyword set — so "the model noticed" and "the engine decided" stay two
+  different events, exactly as they are for every other extracted field.
 - **`null` is a valid answer**, not an error. Absence is a finding input. Verified against a
   deliberately blank field on `samples/pdfs/bank_proof_illegible.pdf`: the model returns
   `"ifsc": null` rather than borrowing the value from another document in the same run.
@@ -77,9 +102,11 @@ that third answer is the whole point of the low-confidence path. `rules.py` owns
 pure), `matching.py` returns it, and a bare `bool` from a simpler injected comparator is still
 accepted.
 
-**Model calls are memoised per run.** R09 and R12 frequently compare the same two strings; asking
-twice costs a second call and puts a duplicate row in the audit trail. A cache hit emits no
-`ai_call` event — only real calls belong in the record.
+**Model calls are memoised per run.** Five rules now compare a document name against
+`legal_entity_name` — R09, R12, R15, R16 and R18 — and on a clean submission they are comparing
+the *same two strings* five times over. Asking five times costs five calls and puts four duplicate
+rows in the audit trail. A cache hit emits no `ai_call` event: only real calls belong in the
+record.
 
 **Thresholds are constants at the top of `matching.py`**, not config. Tuned once against the
 sample set in Part 4, then left alone:
@@ -118,7 +145,7 @@ severities, never the submission). Output is structured as `{subject, body}` and
 **"Actionable" excludes `ai_uncertain`.** Those findings exist because *we* were unsure and routed
 the case to a human reviewer — asking the vendor to resolve our uncertainty, and exposing model
 confidence to them, is the wrong message. A PENDING run whose only FIX findings are uncertain
-gets no draft at all. It is instructed to be specific and dated — *"your Certificate of Insurance expired on 21 July 2026"*, not *"your submission is incomplete"* — and told not to invent requirements beyond the findings given.
+gets no draft at all. It is instructed to be specific — *"we did not receive an address proof"*, not *"your submission is incomplete"* — and told not to invent requirements beyond the findings given.
 
 **Runs only for `PENDING`.** A `REJECTED` run produces an internal note instead. Telling a suspected fraudster exactly which check caught them is a real-world anti-pattern; that asymmetry is deliberate and worth saying out loud in the demo.
 
@@ -142,7 +169,9 @@ downstream of the decision and cannot influence it. This is also why we never bu
 | Do date arithmetic | `date < today` |
 | Decide a severity | Severity is a constant on the rule |
 | Override or soften a deterministic finding | Findings are immutable once emitted |
-| Correct or normalise an extracted value | Silently repairing input destroys R06, R09, and R10 |
+| Correct or normalise an extracted value | Silently repairing input destroys R06, R09, R10, R15 and R16 |
+| Decide whether a document is the right kind | The model transcribes `document_type`; **R13** judges it |
+| Decide whether a document is readable enough | The model returns `null`; **R14** decides what a null costs |
 | Read the vendor's submission during drafting | Stage 7 receives findings only, not the raw submission |
 
 ## Structural enforcement
@@ -160,4 +189,5 @@ If someone deleted every AI call, the pipeline would still run and still decide 
 
 `claude-opus-5`, 1M context, $5 / $25 per MTok. Extraction runs at `effort: "low"`.
 
-Demo volume is roughly 50 extractions across the whole build week, so cost is negligible. `claude-sonnet-5` ($2 / $10) is the available step-down if wanted; not taken by default.
+A full run is five extractions plus, at most, a handful of ambiguous-band name calls, so demo
+volume across the whole build week stays small and cost is negligible. `claude-sonnet-5` ($2 / $10) is the available step-down if wanted; not taken by default.
