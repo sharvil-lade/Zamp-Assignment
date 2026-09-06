@@ -69,9 +69,20 @@ A missing variable stops the app at startup and names the variable, rather than
 quietly running on SQLite.
 
 **`vercel.json` covers both halves.** `buildCommand` is
-`cd frontend && npm ci && npm run build` with `outputDirectory` `frontend/dist`;
-the `@vercel/python` build points at `backend/app.py`; and both `/api/(.*)` and
-`/(.*)` route to it, so the same function answers the API and serves the bundle.
+`cd frontend && npm ci && npm run build`, and every path rewrites to one
+serverless function at `api/index.py` — three lines that put `backend/` on the
+import path and re-export the same ASGI app `uvicorn` runs locally. There is no
+Vercel-specific application.
+
+Two settings on that function are load-bearing, and both are easy to get wrong:
+
+| Setting | Why |
+|---|---|
+| `maxDuration: 300` | The pipeline runs **inside** the request — five model calls, tens of seconds. Vercel's 10-second default aborts every real submission. Hobby caps at 60s; 300 needs Pro. |
+| `includeFiles: frontend/dist/**` | The Python builder only bundles files under the entrypoint's tree. Without this the function ships with no UI and answers 503 on every page. |
+
+`functions` and the legacy `builds` key are **mutually exclusive** — a config
+carrying both fails the deploy outright, which is why `builds` is gone.
 
 ## Environment variables the frontend introduced
 
@@ -214,7 +225,7 @@ Not migration work — genuine gaps, in the order I would close them:
 ## Cost sketch
 
 Anthropic is the only per-run cost: roughly 3 extraction calls at ~2.2k in / ~60
-out, plus a drafting call on PENDING runs. At `claude-opus-5` rates that is a
+out, plus one review call. At `claude-haiku-4-5-20251001` rates that is a small
 fraction of a cent per vendor. Vercel and Supabase free tiers comfortably cover
 demo and pilot volume; "dozens of new vendors a quarter" is not a scaling problem.
 

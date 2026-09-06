@@ -12,7 +12,7 @@ AI appears in exactly **three** places. Each is justified by a rule not being ab
 
 ```python
 resp = client().messages.create(
-    model="claude-opus-5",
+    model="claude-haiku-4-5-20251001",
     max_tokens=2000,
     output_config={
         "effort": "low",
@@ -187,7 +187,17 @@ If someone deleted every AI call, the pipeline would still run and still decide 
 
 ## Model and cost
 
-`claude-opus-5`, 1M context, $5 / $25 per MTok. Extraction runs at `effort: "low"`.
+`claude-haiku-4-5-20251001`. Chosen deliberately for what these calls actually are: extraction is
+*transcription* — the prompt forbids inferring, correcting or completing
+anything — and every value it reads is then judged by a deterministic rule. The
+model is never asked for judgement, so paying for a frontier model's judgement
+buys nothing.
+
+Verified rather than assumed: all four demo scenarios produce their documented
+status and their exact rule set on this model.
+
+Note `effort` is not passed — Haiku rejects it outright, which is the kind of
+thing that only shows up when you actually run it.
 
 A full run is five extractions plus, at most, a handful of ambiguous-band name calls, so demo
 volume across the whole build week stays small and cost is negligible. `claude-sonnet-5` ($2 / $10) is the available step-down if wanted; not taken by default.

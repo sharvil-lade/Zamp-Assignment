@@ -14,7 +14,10 @@ from pathlib import Path
 
 import anthropic
 
-MODEL = "claude-opus-5"
+# Haiku 4.5. Extraction is transcription, not judgement — the prompt
+# forbids inferring or correcting anything — and every value it reads is
+# checked by a deterministic rule afterwards.
+MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 2000
 
 # The five documents this engine accepts, in the order the vendor form asks for
@@ -174,7 +177,6 @@ def extract_document(path: Path, doc_type: str) -> tuple[dict, dict]:
         model=MODEL,
         max_tokens=MAX_TOKENS,
         output_config={
-            "effort": "low",
             "format": {"type": "json_schema", "schema": SCHEMAS[doc_type]},
         },
         messages=[{"role": "user", "content": [

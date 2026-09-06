@@ -1,0 +1,7 @@
+# Everything the app itself never imports. Kept out of requirements.txt so it
+# is not installed into the serverless function.
+-r requirements.txt
+
+pytest
+pglast          # validates the Postgres SQL offline, no server needed
+reportlab       # regenerates the sample PDFs in backend/samples/

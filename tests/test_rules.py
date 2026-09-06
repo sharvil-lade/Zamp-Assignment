@@ -3031,10 +3031,26 @@ def test_there_is_no_execution_mode_to_configure():
 
 
 def test_vercel_config_is_present_and_points_at_the_asgi_app():
-    import pathlib
     cfg = json.loads(repo("vercel.json").read_text(encoding="utf-8"))
-    assert cfg["builds"][0]["src"].endswith("app.py")
-    assert cfg["routes"][0]["dest"].endswith("app.py")
+    fn = cfg["functions"]["api/index.py"]
+
+    # The pipeline runs inside the request: five model calls, tens of seconds.
+    # Vercel's 10s default would abort every real submission.
+    assert fn["maxDuration"] >= 60
+    # The React bundle lives outside the entrypoint's tree, so it has to be
+    # named explicitly or the function ships without a UI.
+    assert fn["includeFiles"].startswith("frontend/dist")
+    assert cfg["rewrites"][0]["destination"] == "/api/index"
+    # `builds` and `functions` are mutually exclusive - having both fails the
+    # deploy outright.
+    assert "builds" not in cfg
+
+
+def test_the_serverless_entrypoint_is_the_same_app_as_local():
+    """No second application, no Vercel-only behaviour."""
+    src = repo("api", "index.py").read_text(encoding="utf-8")
+    assert "from app import app" in src
+    assert "backend" in src
 
 
 def test_env_example_documents_every_required_variable():

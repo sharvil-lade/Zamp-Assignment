@@ -152,8 +152,8 @@ def review(vendor_name: str, status: str, findings, comparisons=None,
     resp = (client or extract.client()).messages.create(
         model=MODEL,
         max_tokens=1200,
-        output_config={"effort": "low",
-                       "format": {"type": "json_schema", "schema": REVIEW_SCHEMA}},
+        output_config={"format": {"type": "json_schema",
+                                 "schema": REVIEW_SCHEMA}},
         messages=[{"role": "user", "content": REVIEW_PROMPT.format(
             vendor=vendor_name or "this vendor", status=status, risk=risk,
             findings=rendered_findings, comparison=rendered_comparison,

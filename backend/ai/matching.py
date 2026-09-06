@@ -21,7 +21,9 @@ MATCH_THRESHOLD = 0.92      # at or above: same entity, no model call
 MISMATCH_THRESHOLD = 0.75   # at or below: different entity, no model call
 MIN_CONFIDENCE = 0.70       # below this the model does not get to decide
 
-MODEL = "claude-opus-5"
+# Only the ambiguous band reaches a model at all, and a low-confidence
+# answer is routed to a human rather than acted on.
+MODEL = "claude-haiku-4-5-20251001"
 
 # Legal-form spellings that mean the same thing. Expanded, not stripped: dropping
 # suffixes entirely would make "Meridian Logistics LLP" and "Meridian Logistics
@@ -86,8 +88,8 @@ def _ask_claude(a: str, b: str, on_ai_call=None) -> NameVerdict:
     resp = anthropic.Anthropic().messages.create(
         model=MODEL,
         max_tokens=500,
-        output_config={"effort": "low",
-                       "format": {"type": "json_schema", "schema": VERDICT_SCHEMA}},
+        output_config={"format": {"type": "json_schema",
+                                 "schema": VERDICT_SCHEMA}},
         messages=[{"role": "user", "content": PROMPT.format(a=a, b=b)}],
     )
     raw = next(bl.text for bl in resp.content if bl.type == "text")

@@ -11,7 +11,7 @@
 | Frontend | **React 18 + Vite**, plain JSX, `react-router-dom` | The whole employee and vendor UI, talking only to `/api` |
 | Styling | **One plain CSS file** (`frontend/src/styles.css`) | No Tailwind build, no design system, no second toolchain |
 | Frontend state | **React state plus two small hooks** | No Redux, no Zustand, no React Query. Ten screens. |
-| AI | **Anthropic SDK** (`claude-opus-5`) | Native PDF input, structured outputs |
+| AI | **Anthropic SDK** (`claude-haiku-4-5-20251001`) | Native PDF input, structured outputs |
 | Tests | **pytest** (`tests/`) and **vitest** (`frontend/src/__tests__/`) | Backend offline, frontend in jsdom |
 
 `python -m uvicorn app:app --reload --app-dir backend --port 8000` starts the whole server: the API, and the built React bundle if one exists. `npm run dev` in `frontend/` is the second process during development only. No Docker, no queue, no ORM, no migrations.

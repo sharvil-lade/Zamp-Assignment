@@ -1,14 +1,9 @@
+# Runtime only — this is what Vercel installs into the function.
 fastapi
-uvicorn[standard]
 python-multipart
 python-dotenv
 anthropic
 httpx
 psycopg[binary]
 
-# tests
-pytest
-pglast          # validates the Postgres SQL offline, no server needed
-
-# reportlab is only needed to regenerate samples/pdfs/ via samples/make_pdfs.py;
-# the committed PDFs mean the app itself never imports it.
+uvicorn[standard]
