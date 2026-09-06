@@ -1,0 +1,28 @@
+# Vercel's FastAPI framework detection needs the entrypoint named: it finds both
+# `backend/app.py` and `api/index.py` and refuses to guess between them.
+#
+# `api/index.py` is a three-line shim that puts `backend/` on the import path and
+# re-exports the same ASGI app `uvicorn` runs locally. There is no second
+# application.
+
+[project]
+name = "vendor-onboarding-decision-engine"
+version = "1.0.0"
+requires-python = ">=3.12"
+
+# Runtime only. Kept in step with requirements.txt by
+# tests/test_rules.py::test_the_two_dependency_lists_agree — two files naming
+# different versions of the same dependency is a deploy that behaves unlike
+# anything anyone tested.
+dependencies = [
+    "fastapi",
+    "python-multipart",
+    "python-dotenv",
+    "anthropic",
+    "httpx",
+    "psycopg[binary]",
+    "uvicorn[standard]",
+]
+
+[tool.vercel]
+entrypoint = "api.index:app"

@@ -3030,29 +3030,67 @@ def test_there_is_no_execution_mode_to_configure():
     assert not hasattr(pipeline, "DEMO_PAUSE_S")
 
 
-def test_vercel_config_is_present_and_points_at_the_asgi_app():
-    cfg = json.loads(repo("vercel.json").read_text(encoding="utf-8"))
-    fn = cfg["functions"]["api/[...path].py"]
-
-    # The pipeline runs inside the request: five model calls, tens of seconds.
-    # Vercel's 10s default would abort every real submission.
-    assert fn["maxDuration"] >= 60
-    # A catch-all function filename means `/api/**` reaches it by filesystem
-    # routing with the path intact. A rewrite would hand it the *rewritten*
-    # path, and every route would 404.
-    assert not any(r["destination"].startswith("/api")
-                   for r in cfg["rewrites"]), "the API must not be rewritten"
-    assert cfg["rewrites"][0]["destination"] == "/index.html"
-    # `builds` and `functions` are mutually exclusive - having both fails the
-    # deploy outright.
-    assert "builds" not in cfg
+def test_vercel_is_told_which_asgi_app_to_serve():
+    """Vercel's FastAPI detection finds both `backend/app.py` and the shim, and
+    refuses to guess. Naming it is what makes the deploy build at all."""
+    import tomllib
+    cfg = tomllib.load(open(repo("pyproject.toml"), "rb"))
+    assert cfg["tool"]["vercel"]["entrypoint"] == "api.index:app"
 
 
 def test_the_serverless_entrypoint_is_the_same_app_as_local():
     """No second application, no Vercel-only behaviour."""
-    src = repo("api", "[...path].py").read_text(encoding="utf-8")
-    assert "from app import app" in src
-    assert "backend" in src
+    src = repo("api", "index.py").read_text(encoding="utf-8")
+    assert "from app import app" in src and "backend" in src
+
+
+def test_the_function_can_outlive_a_default_timeout_and_ships_the_bundle():
+    cfg = json.loads(repo("vercel.json").read_text(encoding="utf-8"))
+    fn = cfg["functions"]["api/index.py"]
+    # The pipeline runs inside the request: five model calls, tens of seconds.
+    # Vercel's 10s default would abort every real submission.
+    assert fn["maxDuration"] >= 60
+    # The React bundle lives outside the entrypoint's tree, so it has to be
+    # named explicitly or the function ships without a UI.
+    assert fn["includeFiles"].startswith("frontend/dist")
+    # `builds` and `functions` are mutually exclusive; having both fails outright.
+    assert "builds" not in cfg
+
+
+def test_the_two_dependency_lists_agree():
+    """`pyproject.toml` is what Vercel may install from and `requirements.txt`
+    is what a developer installs from. Drift between them is a deployment that
+    behaves unlike anything anyone tested."""
+    import tomllib
+    declared = set(tomllib.load(open(repo("pyproject.toml"), "rb"))
+                   ["project"]["dependencies"])
+    pinned = {line.strip() for line in
+              repo("requirements.txt").read_text(encoding="utf-8").splitlines()
+              if line.strip() and not line.startswith("#")}
+    assert declared == pinned, declared ^ pinned
+
+
+def test_every_package_directory_is_a_real_package():
+    """A missing `__init__.py` makes a namespace package that imports fine and
+    exposes nothing — which is exactly how a gitignore typo took the deployment
+    down while every local test passed."""
+    for name in ("routes", "ai", "engine", "data"):
+        init = backend(name, "__init__.py")
+        assert init.exists(), f"backend/{name} has no __init__.py"
+        assert not _is_git_ignored(init), f"backend/{name}/__init__.py is gitignored"
+
+
+def _is_git_ignored(path) -> bool:
+    import subprocess
+    return subprocess.run(["git", "check-ignore", "-q", str(path)],
+                          cwd=repo(), capture_output=True).returncode == 0
+
+
+def test_no_source_file_is_hidden_from_git():
+    """The scratch-script ignore rule must not swallow real source."""
+    for path in (backend("routes", "_shared.py"), backend("engine", "rules.py"),
+                 repo("api", "index.py")):
+        assert not _is_git_ignored(path), f"{path} is gitignored"
 
 
 def test_env_example_documents_every_required_variable():
