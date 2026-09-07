@@ -46,7 +46,7 @@ export default function NewOnboarding() {
     <div style={{ maxWidth: 680 }}>
       <h1>New onboarding</h1>
       <p className="faint" style={{ marginBottom: 16 }}>
-        Creates a case and a one-time secure link. The vendor fills in the form
+        Creates a case and its secure vendor link. The vendor fills in the form
         themselves — you never retype their details.
       </p>
 
@@ -94,8 +94,11 @@ export default function NewOnboarding() {
 }
 
 /**
- * The raw token is shown exactly once, here. Only its hash is stored, so it can
- * never be recovered from the database or the logs afterwards.
+ * The link, right after the case is created.
+ *
+ * It is the case's one permanent URL, not a one-time secret: the case keeps the
+ * token so the link can be shown again from the case page, and it is the same
+ * URL the vendor returns to for every correction. Only the gate moves.
  */
 function Created({ created, onAnother }) {
   const [copied, setCopied] = useState(false);
@@ -104,7 +107,8 @@ function Created({ created, onAnother }) {
     <div style={{ maxWidth: 680 }}>
       <h1>Onboarding created</h1>
       <p className="faint" style={{ marginBottom: 16 }}>
-        Send this link to the vendor. It works once.
+        Send this link to the vendor. They can submit once; if a correction is
+        needed, the same link reopens.
       </p>
 
       <div className="card">
@@ -127,8 +131,9 @@ function Created({ created, onAnother }) {
           </a>
         </div>
         <div className="alert warn" style={{ marginTop: 16, marginBottom: 0 }}>
-          This is the only time the link is shown. Only a hash of it is stored —
-          if it is lost, regenerate it from the case.
+          This is the case's permanent link — you can copy it again from the case
+          page at any time. It is unique to this vendor, so treat it as a
+          credential and send it only to them.
         </div>
       </div>
 

@@ -42,10 +42,11 @@ def _resolve_form(form_id: str | None) -> dict:
 @router.post("", status_code=201)
 def create_case(body: CaseIn, request: Request,
                 _: None = Depends(require_session)) -> dict:
-    """Create a case and mint its one-time vendor link.
+    """Create a case and mint its vendor link.
 
-    The raw token is returned exactly once, here. Only its hash is persisted, so
-    it cannot be recovered from the database or the logs afterwards.
+    The case stores the token alongside its hash, so the link can be shown again
+    from the case page — it is one permanent URL per case, used for the first
+    submission and every correction. The hash remains the lookup key.
     """
     if not body.vendor_name.strip():
         raise HTTPException(400, "Vendor or company name is required.")

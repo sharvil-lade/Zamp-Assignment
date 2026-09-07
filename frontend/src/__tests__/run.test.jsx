@@ -434,6 +434,11 @@ describe("closing the loop with the vendor", () => {
       screen.getByRole("button", { name: /open correction form/i }));
 
     await waitFor(() => expect(api.reopenCase).toHaveBeenCalledWith("OC-1001"));
+    // A successful reopen re-reads the run and reports nothing. The component
+    // has to actually receive its reload callback to do that — without it the
+    // server reopens the case and the reviewer is shown an error anyway.
+    await waitFor(() => expect(api.run).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     // The reviewer stays on the run they were reading.
     expect(window.open).not.toHaveBeenCalled();
     // Same URL as before the click: the gate moved, the link did not.

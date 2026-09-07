@@ -362,7 +362,7 @@ function FindingCard({ f }) {
  * it can be handed out but never looked up again. Nothing leaves the system on
  * its own — a person passes the link to the vendor, and that is the whole loop.
  */
-function Corrections({ run }) {
+function Corrections({ run, onChange }) {
   const { correction } = run;
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);

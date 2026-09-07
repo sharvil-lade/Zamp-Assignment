@@ -422,7 +422,7 @@ def new_token() -> str:
 
 
 def hash_token(token: str) -> str:
-    """Only the hash is ever stored, so a database leak yields no working links."""
+    """The lookup key for a vendor link — a token is never searched for directly."""
     return hashlib.sha256(token.encode()).hexdigest()
 
 
