@@ -979,7 +979,7 @@ def fake_extractor(calls=None, overrides=None):
             calls.append((path.name, doc_type))
         data = dict((overrides or {}).get(doc_type, FAKE_DOCS[doc_type]))
         return data, {"purpose": f"extract:{doc_type}", "model": "fake-model",
-                      "input_summary": path.name, "raw_response": json.dumps(data),
+                      "input_summary": path.name,
                       "usage": {"input_tokens": 100, "output_tokens": 20}}
     return _fn
 
@@ -1017,7 +1017,7 @@ def test_extraction_writes_one_ai_call_event_per_document(db):
     for e in ai:
         detail = json.loads(e["detail_json"])
         assert detail["purpose"].startswith("extract:")
-        assert detail["model"] and detail["raw_response"]
+        assert detail["model"] and detail["input_summary"]
         assert detail["usage"]["input_tokens"] > 0
         assert e["stage"] == "extraction"
 
@@ -1146,8 +1146,7 @@ def test_extraction_model_cannot_set_a_status(db):
         data = dict(FAKE_DOCS[doc_type])
         data["status"] = "APPROVED"          # ignored: not in the schema's fields
         return data, {"purpose": "x", "model": "m", "input_summary": "i",
-                      "raw_response": "{}", "usage": {"input_tokens": 1,
-                                                      "output_tokens": 1}}
+                      "usage": {"input_tokens": 1, "output_tokens": 1}}
     assert pipeline.run(run_id, today=TODAY, extract_fn=liar) == "APPROVED"
     from engine import rules as r
     assert list(inspect_params(r.decide)) == ["findings"]
@@ -1449,7 +1448,8 @@ def fixture_extractor(path, doc_type):
     source = path.read_text(encoding="utf-8").split(":", 1)[1]
     data = dict(FIXTURE_EXTRACTIONS[source])
     return data, {"purpose": "extract:" + doc_type, "model": "replay",
-                  "input_summary": source, "raw_response": json.dumps(data),
+                  "input_summary": source,
+                  "fields_read": sorted(k for k, v in data.items() if v),
                   "usage": {"input_tokens": 1, "output_tokens": 1}}
 
 
@@ -1566,7 +1566,6 @@ def fake_reviewer(calls=None, risk=None):
             extraction_notes=[])
         return result, {"purpose": "ai_employee:review", "capability": "review",
                         "model": "fake-model", "input_summary": status,
-                        "raw_response": "{}",
                         "usage": {"input_tokens": 10, "output_tokens": 20}}
     return _fn
 
@@ -1753,7 +1752,7 @@ def test_bad_attachment_yields_pending_not_error(db):
     status = pipeline.run(run_id, today=TODAY,
                           extract_fn=lambda p, t: (dict(FAKE_DOCS[t]), {
                               "purpose": "extract:" + t, "model": "fake",
-                              "input_summary": p.name, "raw_response": "{}",
+                              "input_summary": p.name,
                               "usage": {"input_tokens": 1, "output_tokens": 1}}))
     assert status == "PENDING"                      # not ERROR
     assert [f["rule_id"] for f in db.get_findings(run_id)] == ["R02"]
@@ -3305,7 +3304,6 @@ def test_ai_employee_cannot_override_a_block(db):
             key_points=[], recommended_action="Approve this vendor.",
             extraction_notes=[]), {"purpose": "ai_employee:review",
                                    "model": "fake", "input_summary": "x",
-                                   "raw_response": "{}",
                                    "usage": {"input_tokens": 1, "output_tokens": 1}}
 
     mismatch = dict(FAKE_DOCS["bank_proof"], account_holder_name="S. Ramesh Kumar")
@@ -3369,7 +3367,7 @@ def test_every_ai_employee_operation_is_audited(db):
                        if e["stage"] == "review" and e["event_type"] == "ai_call")
     detail = json.loads(review_call["detail_json"])
     for field in ("purpose", "capability", "model", "input_summary",
-                  "raw_response", "usage", "duration_ms", "risk"):
+                  "usage", "duration_ms", "risk"):
         assert field in detail, field
     assert review_call["actor"] == "ai_employee"
     assert review_call["ts"]

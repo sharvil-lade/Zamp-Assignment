@@ -100,7 +100,8 @@ def _ask_claude(a: str, b: str, on_ai_call=None) -> NameVerdict:
             "purpose": "name_match",
             "model": MODEL,
             "input_summary": f"{a!r} vs {b!r}",
-            "raw_response": raw,
+            "verdict": bool(data["same_entity"]),
+            "confidence": round(float(data["confidence"]), 2),
             "usage": {"input_tokens": resp.usage.input_tokens,
                       "output_tokens": resp.usage.output_tokens},
         })

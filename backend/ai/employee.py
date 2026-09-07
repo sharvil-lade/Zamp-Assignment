@@ -176,7 +176,6 @@ def review(vendor_name: str, status: str, findings, comparisons=None,
                       "+review_extraction",
         "model": MODEL,
         "input_summary": f"{status}, {len(list(findings))} finding(s) for {vendor_name}",
-        "raw_response": raw,
         "usage": {"input_tokens": resp.usage.input_tokens,
                   "output_tokens": resp.usage.output_tokens},
     }

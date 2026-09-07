@@ -104,6 +104,17 @@ class RuleOutcome:
         return {**self.rule.as_dict(), "state": self.state,
                 "findings": [asdict(f) for f in self.findings]}
 
+    def as_record(self) -> dict:
+        """What is worth persisting: what varied on this run.
+
+        A rule's name, category and purpose are the same on every run and live
+        in `RULES`; writing them into each audit event stored the same few
+        kilobytes of static text per submission. The view model joins them back
+        by id.
+        """
+        return {"rule_id": self.rule.id, "state": self.state,
+                "findings": [asdict(f) for f in self.findings]}
+
 
 @dataclass(frozen=True)
 class RuleContext:

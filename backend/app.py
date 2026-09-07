@@ -116,6 +116,20 @@ app.include_router(api.router)
 
 
 @app.middleware("http")
+async def one_connection_per_request(request: Request, call_next):
+    """Hold a single database connection for the request.
+
+    Only for `/api`: a favicon has no business opening a connection to another
+    continent. Everything below still opens its own commit scope, so the
+    durability the pipeline relies on is unchanged.
+    """
+    if not request.url.path.startswith("/api"):
+        return await call_next(request)
+    with store.connection():
+        return await call_next(request)
+
+
+@app.middleware("http")
 async def refuse_while_misconfigured(request: Request, call_next):
     """Answer every request with the reason, rather than failing silently."""
     if STARTUP_ERROR:

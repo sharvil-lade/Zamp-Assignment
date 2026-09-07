@@ -323,7 +323,10 @@ def test_a_failing_rule_is_recorded_as_failed_in_the_register(db):
     assert states["R10"] == rules.PASSED       # the numbers themselves agree
     r09 = next(c for c in register["checks"] if c["rule_id"] == "R09")
     assert r09["findings"][0]["expected"] == "S. Ramesh Kumar"
-    assert r09["category"] == rules.CAT_BANKING
+    # Name, category and purpose are not written per run — they live in RULES
+    # and the view model joins them back by id.
+    assert set(r09) == {"rule_id", "state", "findings"}
+    assert rules.BY_ID["R09"].category == rules.CAT_BANKING
 
 
 # ============================================================================
@@ -396,3 +399,50 @@ def test_an_errored_run_offers_no_check_register(client, db, monkeypatch):
     body = client.get(f"/api/runs/{run_id}").json()
     assert body["checks"] is None
     assert "not a rejection" in body["decision"]["summary"].lower()
+
+
+# ============================================================================
+# What the audit trail keeps
+# ============================================================================
+
+def test_the_audit_trail_records_the_call_not_the_answer(db):
+    """The values a model read live on the run (`extracted_json`), which is what
+    every rule and every reviewer actually uses. Copying the raw response into
+    events as well stored the same account numbers twice for no extra answer."""
+    from test_rules import fake_reviewer, fixture_extractor
+    from engine import pipeline
+
+    spec = scenario("ec1_happy")
+    run_id = db.create_run("Sundaram", spec["submission"])
+    db.add_event(run_id, "intake", "documents_expected")
+    for doc_type, source in spec["documents"].items():
+        db.save_document(run_id, doc_type, ".pdf", ("stub:" + source).encode())
+    pipeline.run(run_id, today=TODAY, extract_fn=fixture_extractor,
+                 review_fn=fake_reviewer())
+
+    calls = [json.loads(e["detail_json"]) for e in db.get_events(run_id)
+             if e["event_type"] == "ai_call"]
+    assert calls, "the calls themselves are still recorded"
+    for call in calls:
+        assert "raw_response" not in call
+        # ...but enough to audit one: which model, on what, at what cost.
+        assert {"purpose", "model", "input_summary", "usage"} <= set(call)
+
+    # And the answer itself is still there, once, where it is used.
+    assert db.get_run(run_id)["extracted"]["pan_card"]["pan"]
+
+
+def test_no_event_payload_is_large_enough_to_be_a_second_copy(db):
+    from test_rules import fake_reviewer, fixture_extractor
+    from engine import pipeline
+
+    spec = scenario("ec1_happy")
+    run_id = db.create_run("Sundaram", spec["submission"])
+    db.add_event(run_id, "intake", "documents_expected")
+    for doc_type, source in spec["documents"].items():
+        db.save_document(run_id, doc_type, ".pdf", ("stub:" + source).encode())
+    pipeline.run(run_id, today=TODAY, extract_fn=fixture_extractor,
+                 review_fn=fake_reviewer())
+
+    biggest = max(len(e["detail_json"] or "") for e in db.get_events(run_id))
+    assert biggest < 2000, f"an event payload of {biggest} bytes is a copy of something"

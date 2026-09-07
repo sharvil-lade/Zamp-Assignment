@@ -13,6 +13,7 @@ Documents live in storage.py, not on this module's disk — but the public
 functions still hand out `Path` objects so the pipeline is unchanged.
 """
 
+import contextvars
 import hashlib
 import json
 import re
@@ -111,6 +112,7 @@ def _schema() -> list[str]:
         "CREATE INDEX IF NOT EXISTS findings_run_idx ON findings(run_id)",
         "CREATE INDEX IF NOT EXISTS events_run_idx ON events(run_id)",
         "CREATE INDEX IF NOT EXISTS cases_run_idx ON onboarding_cases(run_id)",
+    "CREATE INDEX IF NOT EXISTS runs_case_idx ON runs(case_id)",
     ]
 
 
@@ -123,8 +125,52 @@ def _q(sql: str) -> str:
     return sql.replace("?", "%s") if config.database_backend() == "postgres" else sql
 
 
+# A connection held for the life of one request. Opening one costs ~350ms
+# against a pooler in another region, and the run page needs six queries — so
+# the handshake, not the SQL, was the page load. Reusing the socket does not
+# widen the transaction: every `_conn()` block still commits on its own, which
+# is what keeps a crashed pipeline stage from rolling back the events before it.
+_bound: contextvars.ContextVar = contextvars.ContextVar("bound_conn", default=None)
+
+
+@contextmanager
+def connection():
+    """Bind one connection for this request. Nothing else changes."""
+    conn = _open()
+    token = _bound.set(conn)
+    try:
+        yield
+    finally:
+        _bound.reset(token)
+        try:
+            conn.commit()
+        finally:
+            conn.close()
+
+
 @contextmanager
 def _conn():
+    bound = _bound.get()
+    if bound is not None:
+        try:
+            yield bound
+        except Exception:
+            # Leave the shared connection usable for the rest of the request.
+            bound.rollback()
+            raise
+        else:
+            bound.commit()
+        return
+
+    conn = _open()
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _open():
     if config.database_backend() == "postgres":
         import psycopg
         from psycopg.rows import dict_row
@@ -135,17 +181,12 @@ def _conn():
         # DuplicatePreparedStatement intermittently, turning a correct decision
         # into an ERROR. Nothing here is hot enough for prepared statements to
         # be worth that.
-        conn = psycopg.connect(config.DATABASE_URL, row_factory=dict_row,
+        return psycopg.connect(config.DATABASE_URL, row_factory=dict_row,
                                prepare_threshold=None)
-    else:
-        import sqlite3
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 # Columns added after the first release. `CREATE TABLE IF NOT EXISTS` will not

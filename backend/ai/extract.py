@@ -190,11 +190,15 @@ def extract_document(path: Path, doc_type: str) -> tuple[dict, dict]:
     data = {k: (v.strip() if isinstance(v, str) and v.strip() else None)
             for k, v in data.items()}
 
+    # What was read is kept on the run itself (`runs.extracted_json`), which is
+    # what a reviewer and every rule actually use. The raw response added a
+    # second, larger copy of the same values into the audit trail for no extra
+    # answer — including the account numbers, twice.
     meta = {
         "purpose": f"extract:{doc_type}",
         "model": MODEL,
         "input_summary": f"{path.name} ({path.stat().st_size} bytes)",
-        "raw_response": raw,
+        "fields_read": sorted(k for k, v in data.items() if v),
         "usage": {"input_tokens": resp.usage.input_tokens,
                   "output_tokens": resp.usage.output_tokens},
     }

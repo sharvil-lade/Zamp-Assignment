@@ -283,7 +283,7 @@ def rounds_view(case: dict | None, run_id: str) -> list[dict]:
             for n, r in enumerate(runs, 1)]
 
 
-def case_status_view(case: dict | None) -> dict | None:
+def case_status_view(case: dict | None, known: dict | None = None) -> dict | None:
     """Where the *case* stands right now.
 
     Deliberately independent of which run is on screen: reading submission 1 of
@@ -292,7 +292,12 @@ def case_status_view(case: dict | None) -> dict | None:
     """
     if case is None:
         return None
-    latest = store.get_run(case["run_id"]) if case["run_id"] else None
+    # The run already on screen is very often the case's latest one, and re-
+    # reading it is a whole round trip to another region for a row we hold.
+    if known is not None and known["run_id"] == case["run_id"]:
+        latest = known
+    else:
+        latest = store.get_run(case["run_id"]) if case["run_id"] else None
     status = latest["status"] if latest else case["status"]
     return {"case_id": case["id"], "status": status,
             "status_label": STATUS_LABELS.get(status, status),
@@ -311,11 +316,15 @@ def checks_view(events: list[dict]) -> dict | None:
         return None
 
     grouped: dict = {}
-    for check in detail["checks"]:
+    for record in detail["checks"]:
+        rule = rules.BY_ID.get(record["rule_id"])
+        if rule is None:            # a rule retired since this run was decided
+            continue
+        check = {**rule.as_dict(), "state": record["state"]}
         grouped.setdefault(check["category"], []).append({
             **check,
-            "findings": [{**f, "evidence_rows": _evidence_rows(f, check.get("evidence"))}
-                         for f in check["findings"]],
+            "findings": [{**f, "evidence_rows": _evidence_rows(f, rule.evidence)}
+                         for f in record["findings"]],
         })
 
     return {

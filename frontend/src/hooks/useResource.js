@@ -2,6 +2,25 @@ import { useCallback, useEffect, useState } from "react";
 import useAppStore from "../store";
 
 /**
+ * Requests already in the air, by cache key.
+ *
+ * Two mounts of the same page must not become two identical fetches. React's
+ * StrictMode does exactly that in development, and a fast back-and-forth can do
+ * it in production; either way the second request is asking a question the
+ * first has already asked.
+ */
+const inFlight = new Map();
+
+function once(key, run) {
+  if (!key) return run();
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+  const promise = run().finally(() => inFlight.delete(key));
+  inFlight.set(key, promise);
+  return promise;
+}
+
+/**
  * Load something from the API and keep the three states every page needs:
  * loading, error, and the data. `reload` re-fetches after a mutation.
  *
@@ -30,7 +49,7 @@ export function useResource(loader, deps = [], key = null) {
   useEffect(() => {
     let live = true;
     if (data === null) setLoading(true);
-    run()
+    once(nonce ? null : key, run)
       .then((result) => {
         if (!live) return;
         setData(result);

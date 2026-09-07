@@ -44,7 +44,7 @@ def run_detail(run_id: str, request: Request,
         "correction": correction_view(run, case, findings, request),
         "rounds": rounds_view(case, run_id),
         # Where the case stands now, whichever run is being read.
-        "case_status": case_status_view(case),
+        "case_status": case_status_view(case, run),
         "blocks": sum(f["severity"] == "BLOCK" for f in findings),
         "fixes": sum(f["severity"] == "FIX" for f in findings),
         "uncertain": sum(f["tag"] == "ai_uncertain" for f in findings),

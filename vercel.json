@@ -6,5 +6,8 @@
       "maxDuration": 300,
       "includeFiles": "frontend/dist/**"
     }
-  }
+  },
+  "regions": [
+    "sin1"
+  ]
 }

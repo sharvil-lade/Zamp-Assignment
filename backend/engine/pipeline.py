@@ -288,7 +288,7 @@ def run(run_id: str, *, today: date | None = None, names_match=None,
         # Persisted rather than recomputed, because re-running the rules on a
         # GET would need the name comparator again - and that can call a model.
         store.add_event(run_id, current, "checks_evaluated", detail={
-            "checks": [o.as_dict() for o in outcomes],
+            "checks": [o.as_record() for o in outcomes],
             "summary": rules.summarize(outcomes, findings),
         })
         store.add_event(run_id, current, "decision", detail={

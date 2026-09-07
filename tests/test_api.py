@@ -86,3 +86,61 @@ def test_errors_carry_a_readable_detail_rather_than_a_traceback(client):
     body = r.json()
     assert body["detail"] == "That run does not exist."
     assert "Traceback" not in r.text and "File \"" not in r.text
+
+
+# --- what the page costs -----------------------------------------------------
+
+def _count_connections(monkeypatch):
+    """Every open is a TLS handshake to another region — ~350ms each against a
+    real pooler, which is why the run page took three seconds before this."""
+    from data import store
+    opened = []
+    real = store._open
+    monkeypatch.setattr(store, "_open", lambda: (opened.append(1), real())[1])
+    return opened
+
+
+def test_a_request_opens_one_database_connection(client, db, monkeypatch):
+    opened = _count_connections(monkeypatch)
+    run_id, _ = _seed_run(db)
+    opened.clear()
+    assert client.get(f"/api/runs/{run_id}").status_code == 200
+    assert len(opened) == 1, f"{len(opened)} connections for one page"
+
+
+def test_the_dashboard_opens_one_connection_too(client, db, monkeypatch):
+    opened = _count_connections(monkeypatch)
+    opened.clear()
+    assert client.get("/api/dashboard").status_code == 200
+    assert len(opened) == 1
+
+
+def test_a_static_request_opens_none(anon_client, db, monkeypatch):
+    """A favicon has no business reaching for the database."""
+    opened = _count_connections(monkeypatch)
+    opened.clear()
+    anon_client.get("/favicon.ico")
+    assert opened == []
+
+
+def test_each_operation_still_commits_on_its_own(db):
+    """Sharing the socket must not widen the transaction: a stage that crashes
+    has to leave the events before it on disk."""
+    from data import store
+    with store.connection():
+        run_id = db.create_run("Durable Ltd", {"legal_entity_name": "Durable Ltd"})
+        db.add_event(run_id, "intake", "stage_started")
+        try:
+            with store._conn() as conn:
+                conn.execute("SELECT * FROM nonexistent_table")
+        except Exception:
+            pass
+        # The connection survives the failure and the earlier write is intact.
+        assert len(db.get_events(run_id)) == 1
+        db.add_event(run_id, "intake", "stage_completed")
+        assert len(db.get_events(run_id)) == 2
+
+
+def _seed_run(db):
+    from test_rules import base_submission, execute
+    return execute(db, base_submission())
