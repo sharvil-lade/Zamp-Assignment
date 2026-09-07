@@ -842,7 +842,8 @@ def test_dashboard_api_returns_the_same_metrics_and_columns(client, db):
     from test_rules import base_submission, execute
     execute(db, base_submission())
     body = client.get("/api/dashboard").json()
-    assert set(body["stats"]) == {"total", "approved", "pending", "rejected", "error"}
+    assert set(body["stats"]) == {"total", "awaiting_vendor", "approved",
+                                  "pending", "rejected", "error"}
     assert set(body) == {"stats", "cases", "runs", "statuses", "status_labels",
                          "active"}
     row = body["runs"][0]

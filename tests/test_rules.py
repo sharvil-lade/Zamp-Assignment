@@ -3461,14 +3461,29 @@ def test_dashboard_table_columns_are_unchanged(client, db):
         assert column in body["runs"][0], column
 
 
-def test_dashboard_stats_still_count_runs_by_status(client, db):
-    execute(db, base_submission())                       # APPROVED
-    execute(db, base_submission(contact_phone=""))        # PENDING
-    runs = db.list_runs()
-    assert {r["status"] for r in runs} == {"APPROVED", "PENDING"}
+def test_dashboard_stats_count_cases_not_runs(client, db):
+    """The tiles sit above the case table, so they have to agree with it. A case
+    that has been through a correction has two runs and is still one vendor."""
+    approved, _ = execute(db, base_submission())
+    pending, _ = execute(db, base_submission(contact_phone=""))
+    for run_id, vendor in ((approved, "Approved Ltd"), (pending, "Pending Ltd")):
+        case_id = db.create_case(vendor, "c", "c@e.in", db.new_token())
+        db.attach_run_to_case(case_id, run_id)
+    # A second run on the pending case: still one row, still counted once.
+    second, _ = execute(db, base_submission(contact_phone=""))
+    db.attach_run_to_case(db.list_cases()[0]["id"], second)
+
     stats = client.get("/api/dashboard").json()["stats"]
+    assert len(db.list_runs()) == 3, "three runs..."
+    assert stats["total"] == 2, "...but two cases"
     assert stats["approved"] == 1 and stats["pending"] == 1
-    assert stats["total"] == 2 and stats["rejected"] == 0
+    assert stats["rejected"] == 0
+
+
+def test_a_case_with_no_run_counts_as_awaiting_the_vendor(client, db):
+    db.create_case("Fresh Ltd", "c", "c@e.in", db.new_token())
+    stats = client.get("/api/dashboard").json()["stats"]
+    assert stats["total"] == 1 and stats["awaiting_vendor"] == 1
 
 
 # --- dashboard: created / last activity --------------------------------------

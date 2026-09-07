@@ -22,17 +22,21 @@ def dashboard(status: str | None = None,
     all_runs = store.list_runs()
     all_cases = [case_row(c) for c in store.list_cases()]
     runs = [r for r in all_runs if r["status"] == wanted] if wanted else all_runs
-    cases = all_cases
 
+    # Counted over cases, not runs, because cases are what the table below
+    # shows. Counting runs made the tiles disagree with the rows the moment a
+    # case had two of them — a correction cycle is one vendor, not two.
     return {
         "stats": {
-            "total": len(all_runs),
-            "approved": sum(r["status"] == "APPROVED" for r in all_runs),
-            "pending": sum(r["status"] == "PENDING" for r in all_runs),
-            "rejected": sum(r["status"] == "REJECTED" for r in all_runs),
-            "error": sum(r["status"] == "ERROR" for r in all_runs),
+            "total": len(all_cases),
+            "awaiting_vendor": sum(c["status"] == store.AWAITING_VENDOR
+                                   for c in all_cases),
+            "approved": sum(c["status"] == "APPROVED" for c in all_cases),
+            "pending": sum(c["status"] == "PENDING" for c in all_cases),
+            "rejected": sum(c["status"] == "REJECTED" for c in all_cases),
+            "error": sum(c["status"] == "ERROR" for c in all_cases),
         },
-        "cases": cases,
+        "cases": all_cases,
         "runs": [run_row(r) for r in runs],
         "statuses": list(STATUSES),
         "status_labels": STATUS_LABELS,
