@@ -43,8 +43,7 @@ export default function Login() {
       <ThemeToggle />
 
       <form className="signin-card" onSubmit={onSubmit}>
-        <div className="mark" aria-hidden="true">VO</div>
-        <h1>Vendor Onboarding</h1>
+        <h1>VendorFlow</h1>
         <p className="lede">Decision Engine — enter the password to continue.</p>
         <div className="rule" />
 
@@ -58,8 +57,6 @@ export default function Login() {
           {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
-
-      <p className="signin-foot">Internal tool · Authorised staff only</p>
     </main>
   );
 }
