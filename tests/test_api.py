@@ -144,3 +144,37 @@ def test_each_operation_still_commits_on_its_own(db):
 def _seed_run(db):
     from test_rules import base_submission, execute
     return execute(db, base_submission())
+
+
+# --- the vendor's own submission --------------------------------------------
+
+def test_the_run_reports_what_the_vendor_submitted_including_blanks(client, db):
+    """The reviewer sees the input, not only what the rules made of it."""
+    run_id = db.create_run("Acme", {"legal_entity_name": "Acme Pvt Ltd",
+                                    "pan": "", "_custom": {"note": "hi"}})
+    db.save_document(run_id, "pan_card", ".pdf", b"%PDF-1.4 pan")
+
+    body = client.get(f"/api/runs/{run_id}").json()["submitted"]
+    fields = {f["field"]: f["value"] for f in body["fields"]}
+    assert fields["legal_entity_name"] == "Acme Pvt Ltd"
+    assert fields["pan"] is None                       # blank, not missing
+    assert "_custom" not in fields
+    assert [d["key"] for d in body["documents"]] == ["pan_card"]
+
+
+def test_an_attached_document_can_be_opened_by_a_signed_in_reviewer(client,
+                                                                    anon_client,
+                                                                    db):
+    run_id = db.create_run("Acme", {"legal_entity_name": "Acme"})
+    db.save_document(run_id, "pan_card", ".pdf", b"%PDF-1.4 pan")
+
+    r = client.get(f"/api/runs/{run_id}/documents/pan_card")
+    assert r.status_code == 200 and r.content == b"%PDF-1.4 pan"
+    assert "inline" in r.headers["content-disposition"]
+
+    assert client.get(f"/api/runs/{run_id}/documents/gst_certificate"
+                      ).status_code == 404
+    assert client.get("/api/runs/VS-9999/documents/pan_card").status_code == 404
+    # The document is behind the same door as the run it belongs to.
+    assert anon_client.get(f"/api/runs/{run_id}/documents/pan_card"
+                           ).status_code == 401

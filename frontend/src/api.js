@@ -124,6 +124,34 @@ export const api = {
   // --- runs ----------------------------------------------------------------
   run: (runId, signal) => get(`/runs/${runId}`, { signal }),
 
+  /**
+   * Open an attached document in a new tab.
+   *
+   * The credential is a bearer token, not a cookie, so a plain link would be
+   * unauthenticated — the file is fetched here and handed to the browser as a
+   * blob instead.
+   */
+  openDocument: async (runId, docType) => {
+    const response = await fetch(
+      `${BASE}/api/runs/${runId}/documents/${docType}`,
+      { headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {} });
+    if (!response.ok) {
+      if (response.status === 401) setToken(null);
+      throw new ApiError(response.status, "Could not open that document.");
+    }
+    const url = URL.createObjectURL(await response.blob());
+    // A popup blocker can refuse a window opened after an await. Falling back
+    // to a download keeps the file reachable rather than silently doing nothing.
+    if (!window.open(url, "_blank", "noopener")) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = docType;
+      a.click();
+    }
+    // The tab keeps its own reference once opened; this only drops ours.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  },
+
   // --- direct submission ---------------------------------------------------
 
   // --- vendor portal (public; the token is the only authorisation) ---------

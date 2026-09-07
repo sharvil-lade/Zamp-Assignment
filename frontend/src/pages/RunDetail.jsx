@@ -483,6 +483,13 @@ function Secondary({ run }) {
 
       <Timeline stages={run.stages} />
 
+      {run.submitted && (
+        <Fold summary={`Vendor response · ${run.submitted.fields.filter((f) => f.value).length} fields, ${run.submitted.documents.length} ${run.submitted.documents.length === 1 ? "document" : "documents"}`}>
+          <Submitted runId={run.run_id} submitted={run.submitted}
+                     rejected={run.rejected_uploads} />
+        </Fold>
+      )}
+
       {run.checks && (
         <Fold summary={`All checks · ${run.checks.summary.passed} passed of ${run.checks.summary.total}`}>
           <CheckRegister checks={run.checks} />
@@ -530,6 +537,68 @@ function Secondary({ run }) {
         <AuditTrail events={run.events} />
       </Fold>
     </section>
+  );
+}
+
+/**
+ * The submission itself: every answer as the vendor typed it, and every file
+ * they attached. This is the input the rest of the page is about, so it is shown
+ * exactly as received — blanks included — and nothing here is judged.
+ */
+function Submitted({ runId, submitted, rejected }) {
+  const [failed, setFailed] = useState(null);
+  return (
+    <>
+      <p className="faint">
+        Exactly what the vendor sent, as received. A blank field was left blank
+        on the form.
+      </p>
+      <table className="compare">
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Submitted value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {submitted.fields.map((f) => (
+            <tr key={f.field}>
+              <td className="muted">{f.label}</td>
+              <td className={f.value ? "mono" : "mono faint"}>
+                {f.value || "not provided"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="cat-block">
+        <strong>Documents attached</strong>
+        {submitted.documents.length === 0 ? (
+          <p className="faint">None.</p>
+        ) : (
+          <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+            {submitted.documents.map((d) => (
+              <li key={d.key}>
+                <button className="link" type="button"
+                        onClick={() => api.openDocument(runId, d.key)
+                          .then(() => setFailed(null))
+                          .catch((e) => setFailed(e.detail || "Could not open that document."))}>
+                  {d.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {failed && <p className="faint">{failed}</p>}
+        {rejected?.length > 0 && (
+          <p className="faint">
+            {rejected.length} attachment{rejected.length === 1 ? "" : "s"}{" "}
+            rejected at intake — see below.
+          </p>
+        )}
+      </div>
+    </>
   );
 }
 

@@ -775,13 +775,29 @@ def save_document(run_id: str, doc_type: str, ext: str, data: bytes) -> str:
     return storage.put(storage_prefix(run_id), doc_type, ext, data)
 
 
-def saved_documents(run_id: str) -> dict[str, Path]:
-    """{doc_type: local Path}. Remote objects are materialised on demand, so the
-    extraction stage still receives a Path and needs no knowledge of storage."""
+def _document_keys(run_id: str) -> dict[str, str]:
     keys: dict[str, str] = {}
     for prefix in reversed(_candidate_prefixes(run_id)):   # specific wins
         keys.update(storage.list_documents(prefix))
-    return {doc_type: storage.fetch(key) for doc_type, key in keys.items()}
+    return keys
+
+
+def document_types(run_id: str) -> list[str]:
+    """Which document types this run carries. Lists only — nothing is fetched."""
+    return sorted(_document_keys(run_id))
+
+
+def document_path(run_id: str, doc_type: str) -> Path | None:
+    """One document, fetched on its own. `None` if this run has no such type."""
+    key = _document_keys(run_id).get(doc_type)
+    return storage.fetch(key) if key else None
+
+
+def saved_documents(run_id: str) -> dict[str, Path]:
+    """{doc_type: local Path}. Remote objects are materialised on demand, so the
+    extraction stage still receives a Path and needs no knowledge of storage."""
+    return {doc_type: storage.fetch(key)
+            for doc_type, key in _document_keys(run_id).items()}
 
 
 def has_document_channel(run_id: str) -> bool:
