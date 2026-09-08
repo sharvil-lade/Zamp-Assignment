@@ -10,6 +10,8 @@ belong to rules.py, which cannot import this file.
 import base64
 import json
 import os
+import re
+import unicodedata
 from pathlib import Path
 
 import anthropic
@@ -141,6 +143,24 @@ PROMPTS = {
 }
 
 
+# Characters that carry no meaning but break an exact comparison. A model
+# reading a photographed document occasionally emits a zero-width space inside a
+# number, and `'92402...​66' != '92402...66'` makes R10 report a bank
+# account mismatch that does not exist. Nothing legitimate on any of these five
+# documents contains one, so they are removed rather than reasoned about.
+_INVISIBLE = re.compile(r"[­​-‏‪-‮⁠﻿]")
+
+
+def _clean(value):
+    """Normalise one extracted value. Empty becomes None: absence is a finding."""
+    if not isinstance(value, str):
+        return value
+    # NFKC folds full-width digits and ligature forms onto their plain
+    # equivalents, so a value that only differs by encoding still compares equal.
+    text = unicodedata.normalize("NFKC", _INVISIBLE.sub("", value))
+    return " ".join(text.split()) or None
+
+
 _client = None
 
 
@@ -187,8 +207,7 @@ def extract_document(path: Path, doc_type: str) -> tuple[dict, dict]:
 
     raw = next(b.text for b in resp.content if b.type == "text")
     data = json.loads(raw)          # output_config.format guarantees the shape
-    data = {k: (v.strip() if isinstance(v, str) and v.strip() else None)
-            for k, v in data.items()}
+    data = {k: _clean(v) for k, v in data.items()}
 
     # What was read is kept on the run itself (`runs.extracted_json`), which is
     # what a reviewer and every rule actually use. The raw response added a

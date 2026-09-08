@@ -1042,6 +1042,25 @@ def test_missing_attachment_is_reported_without_calling_the_model(db):
     assert status == "PENDING"
 
 
+@pytest.mark.parametrize("raw,cleaned", [
+    # A model reading a photographed bank letter emits a zero-width space inside
+    # the account number often enough to matter. Left in, it makes R10 report a
+    # mismatch that is not there — a false rejection caused by an invisible
+    # character, which is the worst kind of bug to debug on a demo.
+    ("9240200457812​66", "924020045781266"),
+    ("﻿ABCFS1234K", "ABCFS1234K"),
+    ("ＡＢＣＦＳ１２３４Ｋ", "ABCFS1234K"),
+    ("Sundaram  Industrial\nSupplies LLP", "Sundaram Industrial Supplies LLP"),
+    ("  HDFC0001234 ", "HDFC0001234"),
+    ("   ", None),
+    ("", None),
+    (None, None),
+])
+def test_extracted_values_are_stripped_of_invisible_characters(raw, cleaned):
+    from ai import extract
+    assert extract._clean(raw) == cleaned
+
+
 def test_a_null_extracted_field_never_becomes_a_finding(db):
     """An honest null is missing data, not a contradiction.
 
@@ -3009,17 +3028,25 @@ def test_supabase_requests_carry_the_key_only_in_headers():
 def test_a_submission_is_processed_before_the_response_returns(client, anon_client,
                                                               db, monkeypatch):
     """One execution mode. A background task does not outlive a serverless
-    response, so deferring the work would silently lose it once deployed."""
+    response, so deferring the work would leave the run stuck at RUNNING.
+
+    The vendor still does not wait on it: their browser acknowledges the
+    submission without awaiting this response (VendorForm.jsx), so the work
+    happens inside a request the host is holding open.
+    """
     from engine import pipeline
     calls = []
     monkeypatch.setattr(pipeline, "run", lambda run_id, **k: calls.append(run_id))
 
     url = client.post("/api/onboardings",
-                      json={"vendor_name": "Inline Ltd"}).json()["vendor_url"]
+                      json={"vendor_name": "Deferred Ltd"}).json()["vendor_url"]
     token = url.rsplit("/", 1)[1]
-    anon_client.post(f"/api/vendor/onboard/{token}",
-                     data={"legal_entity_name": "Inline Ltd"})
-    assert len(calls) == 1, "the pipeline must have run inside the request"
+    r = anon_client.post(f"/api/vendor/onboard/{token}",
+                         data={"legal_entity_name": "Deferred Ltd"})
+
+    assert r.json() == {"state": "received"}
+    case = db.get_case_by_token(token)
+    assert calls == [case["run_id"]], "the pipeline must run inside the request"
 
 
 def test_there_is_no_execution_mode_to_configure():
@@ -3597,11 +3624,18 @@ def test_one_token_opens_every_employee_endpoint(client, path):
 
 
 def test_the_vendor_payload_shares_nothing_with_the_employee_one(anon_client, db):
-    """The separate vendor layout, expressed as data: these keys and no others."""
+    """The separate vendor layout, expressed as data: these keys and no others.
+
+    `on_file` is the vendor's own document slots, which they sent us — it says
+    nothing about findings, decisions or the employee side.
+    """
     _, token = make_case(db)
     body = anon_client.get(f"/api/vendor/onboard/{token}").json()
     assert set(body) == {"state", "correcting", "vendor_name", "contact_name",
-                         "schema", "prefill", "max_upload_mb", "accepted_types"}
+                         "schema", "prefill", "on_file", "max_upload_mb",
+                         "accepted_types"}
+    # A first submission holds nothing yet, so every document slot is required.
+    assert body["on_file"] == []
 
 
 def test_the_run_detail_carries_what_the_page_links_to(client, db):

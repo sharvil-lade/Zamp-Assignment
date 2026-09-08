@@ -20,8 +20,11 @@ const INPUT_TYPE = {
   date: "date",
 };
 
-export function Field({ field, defaultValue = "", accept }) {
-  const { id, label, type, required, options, help, canonical } = field;
+export function Field({ field, defaultValue = "", accept, onFile = false }) {
+  const { id, label, type, options, help, canonical } = field;
+  // A document already held for this case satisfies the requirement. Only a
+  // correction round can be in that state; a first submission never is.
+  const required = field.required && !onFile;
   const control = renderControl();
 
   return (
@@ -31,6 +34,7 @@ export function Field({ field, defaultValue = "", accept }) {
         {required && <span className="req" title="Required">*</span>}
       </label>
       {control}
+      {onFile && <p className="hint ok">Already received — attach a new file only to replace it.</p>}
       {help && <p className="hint">{help}</p>}
     </div>
   );
@@ -76,7 +80,8 @@ export function Field({ field, defaultValue = "", accept }) {
   }
 }
 
-export default function SchemaForm({ schema, prefill = {}, accept }) {
+export default function SchemaForm({ schema, prefill = {}, accept, onFile = [] }) {
+  const held = new Set(onFile);
   return (
     <>
       {(schema?.sections || []).map((section, index) => (
@@ -89,6 +94,7 @@ export default function SchemaForm({ schema, prefill = {}, accept }) {
                 key={field.id}
                 field={field}
                 accept={accept}
+                onFile={field.type === "document" && held.has(field.canonical || field.id)}
                 defaultValue={prefill[field.canonical] ?? prefill[field.id] ?? ""}
               />
             ))}

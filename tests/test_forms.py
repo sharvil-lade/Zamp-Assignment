@@ -106,32 +106,43 @@ def test_the_standard_form_sections_read_as_questions_to_a_vendor(db):
         title for title, _ in forms.FIELD_GROUPS] + ["Documents"]
 
 
-def test_only_unconditionally_required_fields_are_required_in_the_browser(db):
-    """GSTIN, PAN and IFSC depend on country and tax type, and R01/R02 decide
-    that from the answers. Marking them required in the browser would stop a US
-    vendor submitting at all — the form would block what the engine allows."""
+def test_every_engine_field_is_required_in_the_browser(db):
+    """Strict submission: a vendor cannot send a half-filled form.
+
+    Stricter than the engine on purpose. R01 still decides what is *actually*
+    required from the answers, so a submission arriving by any other route is
+    judged the same way — the rules stay the safety layer.
+    """
     from engine import forms
     from engine import rules
     schema = db.standard_form()["schema"]
     required = {f["id"] for f in forms.value_fields(schema) if f["required"]}
-    assert required == set(rules.ALWAYS_REQUIRED)
-    assert {"gstin", "pan", "ifsc"}.isdisjoint(required)
+    assert required == set(rules.SUBMISSION_FIELDS)
+    assert {"gstin", "pan", "ifsc"} <= required
 
 
-def test_conditionally_required_documents_are_not_required_in_the_browser(db):
-    """Same reason: R02 asks for a PAN card and a GST certificate only when the
-    submission claims the things they prove."""
+def test_every_document_is_required_in_the_browser(db):
+    """All five, not the three R02 asks of every vendor regardless of country."""
+    from ai import extract
     from engine import forms
-    from engine import rules
     schema = db.standard_form()["schema"]
     required = {f["id"] for f in forms.document_fields(schema) if f["required"]}
-    assert required == set(rules.required_documents({}))
-    assert {"pan_card", "gst_certificate"}.isdisjoint(required)
+    assert required == set(extract.DOC_TYPES)
+    assert {"pan_card", "gst_certificate"} <= required
 
 
-def test_a_us_vendor_can_satisfy_the_standard_form_as_the_browser_enforces_it(db):
-    """The point of the two tests above, stated as the outcome they protect."""
+def test_the_engine_still_judges_completeness_conditionally(db):
+    """The form got stricter; the rules did not.
+
+    A US vendor's submission still satisfies R01 and R02 with no GSTIN, no PAN
+    and no Indian documents. That path is now unreachable through the standard
+    *form* — which is a form-level choice, recorded in `standard_schema()` — but
+    the engine has not changed, so a relaxed duplicate of the form still works.
+    """
+    from datetime import date
+
     from engine import forms
+    from engine import rules
     schema = db.standard_form()["schema"]
     us = {"legal_entity_name": "Northwind Trading Inc", "entity_type":
           "Foreign Corporation", "country_of_incorporation": "US",
@@ -141,21 +152,26 @@ def test_a_us_vendor_can_satisfy_the_standard_form_as_the_browser_enforces_it(db
           "tax_id_type": "EIN", "account_holder_name": "Northwind Trading Inc",
           "account_number": "1234567890", "bank_name": "First Republic"}
 
-    # Nothing the browser insists on is left blank, so the vendor can press send
-    # with no GSTIN, no PAN and no IFSC...
-    unanswered = [f["id"] for f in forms.value_fields(schema)
-                  if f["required"] and not us.get(f["id"])]
-    assert unanswered == []
-
-    # ...and the engine then agrees, which is the half that would make blocking
-    # them in the browser a bug rather than a preference.
-    from engine import rules
-    from datetime import date
     ctx = rules.RuleContext(today=date(2026, 9, 5))
     canonical, _ = forms.normalize_submission(schema, us)
     extracted = dict.fromkeys(rules.required_documents(canonical), {})
     assert rules.r01_required_fields(canonical, None, ctx) == []
     assert rules.r02_required_documents(canonical, extracted, ctx) == []
+
+
+def test_a_lenient_stored_form_is_refreshed_rather_than_left_alone(db):
+    """An install created before strict submission must not keep the old form.
+
+    The standard form is only regenerated when it has fallen behind the engine.
+    A field that is asked for but skippable is exactly that, so it counts.
+    """
+    from engine import forms
+    schema = db.standard_form()["schema"]
+    assert forms.unenforced_requirements(schema) == set()
+
+    lenient = json.loads(json.dumps(schema))
+    lenient["sections"][0]["fields"][0]["required"] = False
+    assert forms.unenforced_requirements(lenient)
 
 
 def test_the_standard_form_explains_what_it_is_asking_for(db):

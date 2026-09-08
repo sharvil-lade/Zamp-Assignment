@@ -34,3 +34,5 @@ server.log
 
 # the case-study brief itself — reference material, not part of the submission
 asa-case-study-candidate*.pdf
+
+case_demo/*

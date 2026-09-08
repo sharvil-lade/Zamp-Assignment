@@ -723,7 +723,8 @@ def seed_standard_template() -> str | None:
     existing = standard_form()
     if existing is not None:
         stale = (forms.validate_schema(existing["schema"])
-                 or forms.missing_engine_fields(existing["schema"]))
+                 or forms.missing_engine_fields(existing["schema"])
+                 or forms.unenforced_requirements(existing["schema"]))
         if stale:
             update_template(existing["id"], description=forms.STANDARD_DESCRIPTION,
                             schema=forms.standard_schema(), touch=False)

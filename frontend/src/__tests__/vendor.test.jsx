@@ -124,6 +124,39 @@ describe("rendering the invited form", () => {
     });
 });
 
+describe("strict submission", () => {
+  it("sends nothing while a required field or document is missing", async () => {
+    renderVendor();
+    const entityType = await screen.findByLabelText(/entity type/i);
+    // Everything except the document, which is the easiest thing to forget.
+    await userEvent.selectOptions(entityType, "LLP");
+    await userEvent.type(screen.getByLabelText(/gstin/i), "29ABCFS1234K1Z3");
+    await userEvent.type(screen.getByLabelText(/trading since/i), "2019-04-01");
+    fireEvent.submit(entityType.closest("form"));
+
+    expect(api.vendorSubmit).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/still needed/i);
+    expect(screen.getByRole("alert"))
+      .toHaveTextContent(/cancelled cheque or bank letter/i);
+  });
+
+  it("does not demand a document the case already holds", async () => {
+    // A correction round: the bank letter is on file, so the vendor fixes what
+    // was wrong instead of re-attaching four good files.
+    api.vendorForm.mockResolvedValue({ ...OPEN, correcting: true,
+                                       on_file: ["bank_proof"] });
+    renderVendor();
+    const entityType = await screen.findByLabelText(/entity type/i);
+    await userEvent.selectOptions(entityType, "LLP");
+    await userEvent.type(screen.getByLabelText(/gstin/i), "29ABCFS1234K1Z3");
+    await userEvent.type(screen.getByLabelText(/trading since/i), "2019-04-01");
+    fireEvent.submit(entityType.closest("form"));
+
+    expect(await screen.findByText(/your details are with the onboarding team/i))
+      .toBeInTheDocument();
+  });
+});
+
 describe("submitting", () => {
   it("posts multipart form data addressed only by token", async () => {
     renderVendor();

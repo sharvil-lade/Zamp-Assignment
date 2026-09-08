@@ -140,6 +140,50 @@ def test_pending_records_what_to_ask_but_does_not_reopen_the_form(db):
     assert "correction_requested" in [e["event_type"] for e in db.get_events(run_id)]
 
 
+def test_an_unsure_comparison_lands_pending_and_stays_correctable(client, db):
+    """The ambiguity path, end to end, on an otherwise complete submission.
+
+    Nothing is missing and nothing contradicts: the only thing wrong is that the
+    comparator could not tell whether the bank letter names the vendor. The model
+    does not get to answer that with a status, so it becomes a FIX, `decide()`
+    turns that into PENDING, and the case remains reopenable for a correction.
+
+    The uncertain finding is deliberately kept off the *vendor's* ask list — our
+    uncertainty is not their homework — so the reviewer sees it and decides.
+    """
+    from test_rules import fake_reviewer, fixture_extractor
+    from engine import pipeline
+
+    spec = scenario("ec1_happy")
+    token = db.new_token()
+    case_id = db.create_case("Sundaram Industrial Supplies LLP", "Priya",
+                             "priya@example.in", token)
+    run_id = db.create_run("Sundaram Industrial Supplies LLP", spec["submission"])
+    db.attach_run_to_case(case_id, run_id)
+    db.add_event(run_id, "intake", "documents_expected")
+    for doc_type, source in spec["documents"].items():
+        db.save_document(run_id, doc_type, ".pdf", ("stub:" + source).encode())
+
+    def unsure(a, b):
+        return rules.NameVerdict(None, score=0.85, reason="model confidence 0.55")
+
+    status = pipeline.run(run_id, today=TODAY, names_match=unsure,
+                          extract_fn=fixture_extractor, review_fn=fake_reviewer())
+
+    assert status == "PENDING"                       # not APPROVED, not REJECTED
+    findings = db.get_findings(run_id)
+    uncertain = [f for f in findings if f.get("tag") == "ai_uncertain"]
+    assert uncertain, "an unsure comparison must leave a finding behind"
+    assert {f["severity"] for f in uncertain} == {rules.FIX}
+    assert not [f for f in findings if f["severity"] == rules.BLOCK]
+
+    # A human decides this one, so it is not itemised to the vendor...
+    assert rules.correction_items(findings) == []
+    # ...but the case is still PENDING, so the reviewer can reopen it for one.
+    assert client.post(f"/api/onboardings/{case_id}/reopen").status_code == 200
+    assert db.get_case(case_id)["status"] == db.AWAITING_VENDOR
+
+
 def test_a_reviewer_opens_the_form_on_the_cases_existing_url(client, db):
     """No new case, no new link — the gate moves and nothing else."""
     case_id, _, _ = make_case_run(db, "ec2_incomplete")

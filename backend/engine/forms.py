@@ -276,20 +276,37 @@ def missing_engine_fields(schema: dict) -> set[str]:
     return (CANONICAL_FIELDS | set(extract.DOC_TYPES)) - asked
 
 
+def unenforced_requirements(schema: dict) -> set[str]:
+    """Engine fields this schema asks for but lets the vendor skip.
+
+    Same purpose as `missing_engine_fields`: a form that collects less than the
+    engine reads sends the vendor away and brings them back. Asking for a field
+    and then accepting it blank has the same effect, so it counts as the same
+    kind of staleness.
+    """
+    return {f["id"] for _, f in iter_fields(schema)
+            if f.get("canonical") and not f.get("required")}
+
+
 def standard_schema() -> dict:
     """The existing PS-2 form, expressed as a form schema.
 
     Derived from rules.py rather than retyped, so the default template cannot
     drift away from the fields the deterministic engine actually reads.
     """
-    # Only what every vendor owes us is marked required in the browser. GSTIN,
-    # PAN and IFSC depend on country and tax type, and R01/R02 decide that from
-    # the answers — marking them required here would block an American vendor
-    # from submitting at all. Both lists are read from the engine, so the form
-    # cannot disagree with the rule that judges it.
-    always_required = set(rules.ALWAYS_REQUIRED)
-    required_documents = set(rules.required_documents({}))
-
+    # Every canonical field and every document is required in the browser: a
+    # vendor cannot submit a half-filled form and discover an hour later that
+    # they had to send five documents, not three.
+    #
+    # This is stricter than the engine, deliberately. R01 and R02 still decide
+    # what is required from the answers — an incomplete submission that arrives
+    # by any other route is still judged the same way, so the rules remain the
+    # safety layer rather than the only layer.
+    #
+    # The cost is that the standard form now assumes an Indian vendor: GSTIN,
+    # PAN, IFSC, the PAN card and the GST certificate are all insisted on, and
+    # a US vendor cannot satisfy it. That is a form-level decision, not an
+    # engine one — duplicate this form and relax those five for a US intake.
     sections = []
     for title, field_ids in FIELD_GROUPS:
         fields = []
@@ -300,7 +317,7 @@ def standard_schema() -> dict:
                 # rest, which turns GSTIN into "Gstin" and IFSC into "Ifsc".
                 "label": _sentence_case(rules.FIELD_LABELS[field_id]),
                 "type": "select" if field_id in _OPTIONS else _TYPES.get(field_id, "text"),
-                "required": field_id in always_required,
+                "required": True,
                 "canonical": field_id,
             }
             if field_id in _OPTIONS:
@@ -317,7 +334,7 @@ def standard_schema() -> dict:
                        "file them.",
         "fields": [
             {"id": doc_type, "label": rules.DOCUMENT_LABELS[doc_type],
-             "type": DOCUMENT_TYPE, "required": doc_type in required_documents,
+             "type": DOCUMENT_TYPE, "required": True,
              "canonical": doc_type, "help": _DOCUMENT_HELP[doc_type]}
             for doc_type in extract.DOC_TYPES],
     })

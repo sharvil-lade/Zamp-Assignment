@@ -10,6 +10,7 @@ from engine import forms as form_domain
 from engine import pipeline
 from data import store
 from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/vendor", tags=["vendor"])
 
@@ -47,9 +48,23 @@ def vendor_form(token: str) -> dict:
         "contact_name": case["contact_name"],
         "schema": schema,
         "prefill": _prefill(case),
+        "on_file": _documents_on_file(case),
         "max_upload_mb": extract.MAX_UPLOAD_BYTES // 1024 // 1024,
         "accepted_types": sorted(extract.MEDIA_TYPES),
     }
+
+
+def _documents_on_file(case: dict) -> list[str]:
+    """Documents this case already holds, so a correction need not re-attach them.
+
+    Every document slot is required in the browser. On a first submission that
+    means all five. On a correction round the vendor is fixing one or two
+    things, and documents are stored per case rather than per run - so making
+    them re-upload four good files to replace one is a form bug, not strictness.
+    """
+    if case["run_id"] is None:
+        return []
+    return store.document_types(case["run_id"])
 
 
 def _prefill(case: dict) -> dict:
@@ -102,9 +117,18 @@ async def vendor_submit(token: str, request: Request) -> dict:
                     detail={"case_id": case["id"],
                             "form_id": case.get("form_id")})
 
-    # Inline, always. A background task does not outlive a serverless
-    # response, so deferring the work would silently lose it once deployed.
-    pipeline.run(run_id)
+    # Inline, always. A background task does not outlive a serverless response,
+    # so deferring the work would leave the run stuck at RUNNING once deployed.
+    # The vendor is not made to wait on it either: their browser acknowledges
+    # the submission without awaiting this response (VendorForm.jsx), so the
+    # work still happens inside a request the platform is holding open.
+    #
+    # In a threadpool, because this handler is async and `pipeline.run` blocks
+    # for the better part of a minute. Calling it directly would hold the event
+    # loop for that whole time, and the employee watching the run would get no
+    # response at all until it finished - which is exactly the live view they
+    # are supposed to be watching.
+    await run_in_threadpool(pipeline.run, run_id)
     return {"state": "received"}
 
 
