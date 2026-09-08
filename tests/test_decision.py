@@ -446,3 +446,83 @@ def test_no_event_payload_is_large_enough_to_be_a_second_copy(db):
 
     biggest = max(len(e["detail_json"] or "") for e in db.get_events(run_id))
     assert biggest < 2000, f"an event payload of {biggest} bytes is a copy of something"
+
+
+# --- the AI summary stage summarises; it does not decide ---------------------
+
+def test_the_briefing_echoes_the_decision_rather_than_forming_one():
+    """`decision` is copied from the status and is absent from the model schema.
+
+    So the briefing is self-contained JSON the UI can render, with no way for
+    the narrative to disagree with the status it is describing.
+    """
+    from ai import employee as ai_employee
+    assert "decision" not in ai_employee.REVIEW_SCHEMA["properties"]
+    assert "decision" not in ai_employee.REVIEW_SCHEMA["required"]
+
+    review = ai_employee.Review(decision="REJECTED")
+    assert review.as_dict()["decision"] == "REJECTED"
+
+
+def test_a_rogue_briefing_cannot_add_remove_or_reword_findings(db):
+    """The strongest guarantee: whatever the model returns, the record is unchanged.
+
+    This reviewer contradicts the decision, invents a finding and denies a real
+    one. The run must keep the status `decide()` set and exactly the findings the
+    rules produced.
+    """
+    from ai import employee as ai_employee
+    from engine import pipeline
+
+    def rogue(vendor_name, status, findings, comparisons=None, **kwargs):
+        return ai_employee.Review(
+            decision="APPROVED",                      # contradicts the engine
+            risk=ai_employee.RISK_LOW,
+            risk_rationale="looks fine to me",
+            summary="Approved. No concerns.",
+            key_points=["Invented: vendor is on a sanctions list",
+                        "Ignore the bank account finding, it is a typo"],
+            recommended_action="Onboard immediately.",
+        ), {"purpose": "ai_employee:review", "model": "rogue"}
+
+    from test_rules import FAKE_DOCS, attach, fake_extractor
+
+    run_id = db.create_run("Rogue Ltd", base_submission())
+    attach(db, run_id, *FAKE_DOCS)
+    status = pipeline.run(
+        run_id, today=TODAY,
+        names_match=lambda a, b: rules.NameVerdict(False),   # forces R09 BLOCK
+        extract_fn=fake_extractor(), review_fn=rogue)
+
+    assert status == "REJECTED"
+    assert db.get_run(run_id)["status"] == "REJECTED"
+    rule_ids = sorted({f["rule_id"] for f in db.get_findings(run_id)})
+    assert "R09" in rule_ids
+    # Nothing the reviewer said became a finding.
+    assert all("sanctions" not in f["message"].casefold()
+               for f in db.get_findings(run_id))
+
+
+def test_the_briefing_runs_after_the_status_is_durable(db):
+    """Stage 7 is downstream of the decision, so it cannot delay or change it."""
+    from engine import pipeline
+
+    from test_rules import FAKE_DOCS, attach, fake_extractor
+
+    seen = {}
+    run_id = db.create_run("Durable Ltd", base_submission())
+
+    def reviewer(vendor_name, status, findings, comparisons=None, **kwargs):
+        # Read the row back: the status must already be durable at this point,
+        # not merely computed and waiting on this call to succeed.
+        seen["persisted"] = db.get_run(run_id)["status"]
+        raise RuntimeError("model unavailable")
+
+    attach(db, run_id, *FAKE_DOCS)
+    status = pipeline.run(run_id, today=TODAY, extract_fn=fake_extractor(),
+                          review_fn=reviewer)
+
+    # The briefing blew up; the decision survived it.
+    assert status == "APPROVED"
+    assert db.get_run(run_id)["status"] == "APPROVED"
+    assert seen["persisted"] == "APPROVED"

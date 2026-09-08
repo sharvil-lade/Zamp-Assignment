@@ -48,6 +48,10 @@ RISK_LOW, RISK_MEDIUM, RISK_HIGH = "Low", "Medium", "High"
 class Review:
     """Everything the Onboarding Assistant has to say about one run. Advisory only."""
 
+    # Echoed from the decision the engine already made, never produced by the
+    # model - it is not in REVIEW_SCHEMA, so there is no way for the briefing to
+    # disagree with the status it is describing.
+    decision: str = ""
     risk: str = RISK_LOW
     risk_rationale: str = ""
     summary: str = ""
@@ -107,8 +111,19 @@ Write a short internal briefing for the reviewer who has to act on this.
   should double-check — a value that looked ambiguous, a field that was blank.
   Empty list if the extraction looked clean.
 
-Never contradict the decision. Never suggest overriding it. Never invent a check \
-that is not listed. This is an internal note, not a message to the vendor."""
+You are summarising a finished result, not reviewing it. Specifically:
+
+- Never contradict the decision, and never suggest overriding it.
+- Report only the failed checks listed above. Do not invent one, drop one, merge \
+two into one, split one into two, or re-order them.
+- Do not re-judge severity. A blocking check is blocking, and a fixable one is \
+fixable, because a rule said so - not because of how it reads to you.
+- Do not reinterpret what a check found. If a check says the bank account holder \
+differs from the entity, say that; do not speculate about why.
+- If there are no failed checks, say so plainly in one or two sentences and \
+stop. Do not manufacture concerns to fill the space.
+
+This is an internal note, not a message to the vendor."""
 
 
 # --- capability 1: extraction ------------------------------------------------
@@ -163,6 +178,7 @@ def review(vendor_name: str, status: str, findings, comparisons=None,
     data = json.loads(raw)
 
     result = Review(
+        decision=status,
         risk=risk,
         risk_rationale=data["risk_rationale"].strip(),
         summary=data["summary"].strip(),

@@ -34,7 +34,7 @@ STAGES = (
     ("consistency", "Cross-checking information", None),
     ("decision", "Decision", False),
     ("review", "Onboarding Assistant review", True),
-    ("communicate", "Preparing communication", True),
+    ("communicate", "Preparing communication", False),
 )
 
 

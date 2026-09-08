@@ -3301,12 +3301,25 @@ def test_review_risk_is_the_deterministic_one_not_the_models():
 
 
 def test_the_review_prompt_forbids_contradicting_the_decision():
+    """The briefing summarises a finished result; the prompt has to say so.
+
+    These are the instructions that keep stage 7 advisory. They are asserted
+    rather than trusted because the guarantee is only as good as the wording.
+    """
     from ai import employee as ai_employee
     p = ai_employee.REVIEW_PROMPT
     assert "you cannot change it" in p
     assert "Never contradict the decision" in p
-    assert "Never suggest overriding it" in p
+    assert "never suggest overriding it" in p
     assert "internal note, not a message to the vendor" in p
+    # Summarise only, and only what the rules found.
+    assert "summarising a finished result, not reviewing it" in p
+    assert "Do not invent one, drop one, merge" in p
+    assert "Do not re-judge severity" in p
+    assert "Do not reinterpret what a check found" in p
+    # And a clean run gets a short approval, not manufactured concern.
+    assert "If there are no failed checks" in p
+    assert "Do not manufacture concerns" in p
 
 
 def test_review_serialises_for_storage():

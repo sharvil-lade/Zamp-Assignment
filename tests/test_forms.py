@@ -969,3 +969,18 @@ def test_a_database_with_the_old_versioned_shape_is_migrated(db, monkeypatch):
     # The thing that actually broke: an insert against the migrated table.
     assert db.create_template("After the migration", "", "e@x.test",
                               {"sections": []})
+
+
+def test_the_ai_badges_match_where_a_model_is_actually_called():
+    """The UI's AI flags are a claim about the architecture, so pin them.
+
+    Exactly two stages always call a model (extraction, the assistant review)
+    and one calls it conditionally (consistency, only for an ambiguous name).
+    Everything else must be flagged False - `communicate` in particular, whose
+    correction list is built from findings by rules.py with no model involved.
+    """
+    from engine import pipeline
+    flags = {key: ai for key, _, ai in pipeline.STAGES}
+    assert [k for k, ai in flags.items() if ai is True] == ["extraction", "review"]
+    assert [k for k, ai in flags.items() if ai is None] == ["consistency"]
+    assert flags["communicate"] is False
