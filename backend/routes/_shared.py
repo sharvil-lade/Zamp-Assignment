@@ -7,6 +7,7 @@ derive a label, a status word or a timestamp for itself.
 from datetime import datetime
 
 from engine import pipeline
+from engine import policy
 from engine import rules
 from data import store
 
@@ -190,7 +191,7 @@ def decision_view(run: dict, findings: list[dict], events: list[dict]) -> dict:
     status = run["status"]
     decided = next((e["detail"] for e in events
                     if e["event_type"] == "decision"), None)
-    explanation = (decided or {}).get("explanation") or rules.explain(status, findings)
+    explanation = (decided or {}).get("explanation") or policy.explain(status, findings)
     return {
         "status": status,
         "status_label": STATUS_LABELS.get(status, status),
@@ -259,7 +260,7 @@ def correction_view(run: dict, case: dict | None, findings: list[dict],
                          else "Corrections not requested yet" if pending else None),
         "vendor_url": (vendor_url(request, case["token"])
                        if case and request else None),
-        "items": rules.correction_items(findings) if pending else [],
+        "items": policy.correction_items(findings) if pending else [],
     }
 
 

@@ -15,7 +15,7 @@
 This is an orchestration layer, not an agent. It has no database handle, no shell,
 no arbitrary tool use: it can only call the capabilities defined below, each of
 which takes plain data and returns plain data. Everything it produces is advisory
-— `rules.decide()` remains the only thing that sets a status.
+— `policy.decide()` remains the only thing that sets a status.
 
 Capability cost note: `review_extraction`, `review_findings`, `summarize_vendor`
 and `recommend_next_action` are facets of a single structured model call
@@ -29,6 +29,8 @@ from dataclasses import asdict, dataclass, field
 
 from ai import extract
 from engine import rules
+from engine.policy import (RISK_HIGH, RISK_LOW,  # noqa: F401
+                          RISK_MEDIUM, assess_risk)
 
 MODEL = extract.MODEL
 
@@ -40,9 +42,6 @@ CAPABILITIES = (
     "summarize_vendor",
     "recommend_next_action",
 )
-
-RISK_LOW, RISK_MEDIUM, RISK_HIGH = "Low", "Medium", "High"
-
 
 @dataclass
 class Review:
@@ -126,6 +125,11 @@ stop. Do not manufacture concerns to fill the space.
 This is an internal note, not a message to the vendor."""
 
 
+# Risk is deterministic policy, not model judgement, so it lives in
+# engine/policy.py. Re-exported here because it is one of this worker's
+# listed capabilities.
+
+
 # --- capability 1: extraction ------------------------------------------------
 
 def extract_document(path, doc_type: str):
@@ -133,22 +137,6 @@ def extract_document(path, doc_type: str):
     return extract.extract_document(path, doc_type)
 
 
-# --- capability 2: risk (deterministic) --------------------------------------
-
-def assess_risk(findings) -> str:
-    """Risk follows finding severity, not model judgement.
-
-    A model that could talk risk down would be a model that could talk a
-    rejection down. The narrative around this level is AI-written; the level
-    itself is arithmetic.
-    """
-    severities = {f["severity"] if isinstance(f, dict) else f.severity
-                  for f in findings}
-    if rules.BLOCK in severities:
-        return RISK_HIGH
-    if rules.FIX in severities:
-        return RISK_MEDIUM
-    return RISK_LOW
 
 
 # --- capabilities 3-6: one structured call -----------------------------------

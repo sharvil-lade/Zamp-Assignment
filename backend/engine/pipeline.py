@@ -16,6 +16,7 @@ from ai import employee as ai_employee
 from ai import extract
 from engine import forms
 from ai import matching
+from engine import policy
 from engine import rules
 from data import store
 
@@ -188,7 +189,7 @@ def _communicate_stage(run_id: str, status: str, findings, submission: dict,
             })
             outcome = "internal_note"
 
-        elif status == "PENDING" and (items := rules.correction_items(findings)):
+        elif status == "PENDING" and (items := policy.correction_items(findings)):
             # Record what the vendor would have to fix, but do not reopen
             # their form. A decision landing at 2am must not silently make the
             # case submittable again — a reviewer reads the findings first and
@@ -283,7 +284,7 @@ def run(run_id: str, *, today: date | None = None, names_match=None,
                                 submission, extracted, ctx, outcomes)
 
         current = "decision"
-        status = rules.decide(findings)
+        status = policy.decide(findings)
         # The full check register: every rule, whether it ran, and what it found.
         # Persisted rather than recomputed, because re-running the rules on a
         # GET would need the name comparator again - and that can call a model.
@@ -298,7 +299,7 @@ def run(run_id: str, *, today: date | None = None, names_match=None,
             "rule_ids": sorted({f.rule_id for f in findings}),
             # Written by the engine, not by a model. The run page can explain a
             # decision even on a run where the Onboarding Assistant was unavailable.
-            "explanation": rules.explain(status, findings),
+            "explanation": policy.explain(status, findings),
         })
         # Persist the decision before stage 7 runs. Communication is downstream of
         # the decision and must never be able to change or delay it.

@@ -110,6 +110,11 @@ h3 { font-size: 11px; margin: 0 0 var(--gap-1); text-transform: uppercase;
      letter-spacing: 0.1em; color: var(--faint); font-weight: 600; }
 p { margin: 0 0 var(--gap-2); }
 
+/* iOS enlarges text on rotation unless told not to; and nothing
+   wide should be able to push the page sideways. */
+html { -webkit-text-size-adjust: 100%; }
+img, svg, canvas, iframe { max-width: 100%; }
+
 /* --- shell ---------------------------------------------------------------- */
 
 .header {
@@ -527,11 +532,22 @@ details.note[open] > summary { margin-bottom: var(--gap-1); }
 
 
 /* --- narrow screens ----------------------------------------------------------
-   The app is a desk tool, so this is graceful degradation rather than a mobile
-   design: stop the header and the two-column grids from overflowing, and give
-   wide tables somewhere to scroll. */
+   Wide tables keep their columns and scroll inside their panel; everything
+   else reflows. */
 
 .scroll-x { overflow-x: auto; }
+
+/* --- responsive --------------------------------------------------------------
+   A vendor fills their half of this on whatever device is in their hand, so the
+   layout has to hold from a 320px phone up. Four steps, each doing one thing:
+   fewer columns, then stacked, then touch-sized. */
+
+/* Tablet and small laptop: six stat tiles and a four-part timeline are too
+   narrow to read before the grids collapse entirely. */
+@media (max-width: 1024px) {
+  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .timeline { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 
 @media (max-width: 720px) {
   main { padding: var(--gap-3) var(--gap-2); }
@@ -547,6 +563,39 @@ details.note[open] > summary { margin-bottom: var(--gap-1); }
   .card { overflow-x: auto; }
   .subs { flex-wrap: nowrap; overflow-x: auto; }
   .timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* An identifier is one long unbroken token; a 15-character GSTIN in a narrow
+     cell is what pushes the whole page sideways. */
+  td, .evidence td { overflow-wrap: anywhere; }
+  .evidence { min-width: 0; }
+  .decision .lead { max-width: none; }
+}
+
+/* Phone. One column for anything still paired, and nothing left holding a
+   width the screen cannot give it. */
+@media (max-width: 480px) {
+  main { padding: var(--gap-2) var(--gap-2); }
+  .card { padding: var(--gap-2); }
+  .timeline { grid-template-columns: 1fr; }
+  .sub { min-width: 0; flex: 1 0 auto; }
+  .between { flex-direction: column; gap: var(--gap-2); }
+  /* Full-width actions: a button the thumb can find without aiming. */
+  .row > button, .row > .btn { flex: 1 1 auto; justify-content: center; }
+  h1 { font-size: 20px; }
+}
+
+/* Touch, at any width. Two separate problems, both fixed here:
+   Safari zooms the page when a focused input is under 16px, which throws a
+   vendor out of the form mid-answer; and a 32px control is below the size a
+   fingertip reliably hits. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    font-size: 16px;
+  }
+  input:not([type="checkbox"]):not([type="radio"]), select { height: 42px; }
+  button, .btn { height: 42px; padding: 0 16px; }
+  button.theme { width: 42px; }
+  .nav a { padding: 9px 12px; }
+  .stat { padding: 12px; }
 }
 
 .nowrap { white-space: nowrap; }

@@ -12,6 +12,7 @@ import json
 import pytest
 from conftest import backend as backend_path
 
+from engine import policy
 from engine import rules
 
 TODAY = __import__("datetime").date(2026, 9, 6)
@@ -203,13 +204,13 @@ def test_explain_answers_for_every_status_without_touching_anything():
     # never returns PENDING with nothing to fix, so that pairing is not a case.
     for status, findings in [("APPROVED", []), ("PENDING", [fix]),
                              ("REJECTED", [block]), ("ERROR", []), ("RUNNING", [])]:
-        out = rules.explain(status, findings)
+        out = policy.explain(status, findings)
         assert set(out) == {"headline", "summary", "reason", "next_action"}, status
         assert out["headline"] and out["summary"], status
 
 
 def test_approved_reads_as_a_clearance():
-    out = rules.explain("APPROVED", [])
+    out = policy.explain("APPROVED", [])
     assert out["headline"] == "All required checks passed"
     assert "no further action" in out["next_action"].lower()
 
@@ -218,9 +219,9 @@ def test_rejected_names_the_contradiction_and_refuses_to_proceed():
     finding = rules.Finding("R09", rules.BLOCK, rules.STAGE_CONSISTENCY,
                             "Bank account is held in a different name than the "
                             "vendor entity")
-    out = rules.explain("REJECTED", [finding])
+    out = policy.explain("REJECTED", [finding])
     assert out["headline"] == "1 blocking inconsistency"
-    assert out["reason"] == rules.BLOCK_REASONS[rules.CAT_BANKING]
+    assert out["reason"] == policy.BLOCK_REASONS[rules.CAT_BANKING]
     assert "do not proceed" in out["next_action"].lower()
     assert "R09" not in out["summary"], "the headline explanation is not rule jargon"
 
@@ -228,7 +229,7 @@ def test_rejected_names_the_contradiction_and_refuses_to_proceed():
 def test_pending_says_what_to_request():
     fixes = [rules.Finding("R02", rules.FIX, rules.STAGE_COMPLETENESS, "A missing"),
              rules.Finding("R14", rules.FIX, rules.STAGE_FORMAT, "B unreadable")]
-    out = rules.explain("PENDING", fixes)
+    out = policy.explain("PENDING", fixes)
     assert out["headline"] == "2 items need correction"
     assert "correction link" in out["next_action"].lower()
     assert "A missing and B unreadable." == out["summary"]
@@ -239,13 +240,13 @@ def test_pending_on_uncertainty_alone_sends_nothing_to_the_vendor():
     must not be 'ask the vendor'."""
     uncertain = rules.Finding("R09", rules.FIX, rules.STAGE_CONSISTENCY,
                               "Could not confidently determine", tag="ai_uncertain")
-    out = rules.explain("PENDING", [uncertain])
+    out = policy.explain("PENDING", [uncertain])
     assert "yourself" in out["next_action"]
     assert "request" not in out["next_action"].lower()
 
 
 def test_error_is_explained_as_not_a_decision():
-    out = rules.explain("ERROR", [])
+    out = policy.explain("ERROR", [])
     assert "not a rejection" in out["summary"].lower()
 
 
@@ -253,7 +254,7 @@ def test_explain_accepts_findings_as_they_come_back_from_the_database():
     row = {"rule_id": "R09", "severity": rules.BLOCK, "stage": "consistency",
            "message": "Bank account is held in a different name", "expected": "a",
            "actual": "b", "tag": None}
-    assert rules.explain("REJECTED", [row])["headline"] == "1 blocking inconsistency"
+    assert policy.explain("REJECTED", [row])["headline"] == "1 blocking inconsistency"
 
 
 # ============================================================================
@@ -526,3 +527,62 @@ def test_the_briefing_runs_after_the_status_is_durable(db):
     assert status == "APPROVED"
     assert db.get_run(run_id)["status"] == "APPROVED"
     assert seen["persisted"] == "APPROVED"
+
+
+# --- the rules / policy boundary --------------------------------------------
+
+def test_policy_owns_the_decision_and_rules_owns_the_checks():
+    """The three-layer claim, asserted rather than described.
+
+    AI interprets documents -> rules validate evidence -> policy decides.
+    `rules.py` may not know that `policy.py` exists, which is what keeps it
+    standard-library-only and therefore unable to reach a model.
+    """
+    import ast
+
+    from engine import policy
+    src = backend_path("engine/rules.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert "policy" not in imported and "engine" not in imported and "ai" not in imported
+
+    # The policy layer lives in exactly one place.
+    for name in ("decide", "explain", "assess_risk", "correction_request",
+                 "correction_items", "BLOCK_REASONS"):
+        assert hasattr(policy, name), name
+        assert not hasattr(rules, name), f"{name} still in rules.py"
+
+
+def test_decide_maps_severity_to_status_and_nothing_else():
+    from engine import policy
+    block = rules.Finding("R09", rules.BLOCK, rules.STAGE_CONSISTENCY, "blocking")
+    fix = rules.Finding("R01", rules.FIX, rules.STAGE_COMPLETENESS, "fixable")
+
+    assert policy.decide([]) == "APPROVED"
+    assert policy.decide([fix]) == "PENDING"
+    assert policy.decide([block]) == "REJECTED"
+    # Precedence: one blocking finding outweighs any number of fixable ones.
+    assert policy.decide([fix, fix, block]) == "REJECTED"
+
+
+def test_assess_risk_follows_severity_after_the_move():
+    from engine import policy
+    assert policy.assess_risk([]) == policy.RISK_LOW
+    assert policy.assess_risk([rules.Finding("R01", rules.FIX, rules.STAGE_COMPLETENESS, "x")]) == policy.RISK_MEDIUM
+    assert policy.assess_risk([rules.Finding("R09", rules.BLOCK, rules.STAGE_CONSISTENCY, "x")]) == policy.RISK_HIGH
+    # Dicts read back from the database work the same as live findings.
+    assert policy.assess_risk([{"severity": "BLOCK"}]) == policy.RISK_HIGH
+
+
+def test_the_assistant_still_exposes_assess_risk_from_policy():
+    """It is a listed capability of the worker, so the name has to resolve —
+    but there is only one implementation, and it is policy's."""
+    from ai import employee as ai_employee
+    from engine import policy
+    assert "assess_risk" in ai_employee.CAPABILITIES
+    assert ai_employee.assess_risk is policy.assess_risk

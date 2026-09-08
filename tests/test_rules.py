@@ -12,8 +12,10 @@ import pytest
 
 from conftest import TEST_PASSWORD, backend, repo
 
+from engine import policy
 from engine import rules
-from engine.rules import BLOCK, FIX, Finding, RuleContext, decide, gstin_checksum
+from engine.policy import decide
+from engine.rules import BLOCK, FIX, Finding, RuleContext, gstin_checksum
 
 TODAY = date(2026, 9, 5)
 CTX = RuleContext(today=TODAY)
@@ -1167,8 +1169,8 @@ def test_extraction_model_cannot_set_a_status(db):
         return data, {"purpose": "x", "model": "m", "input_summary": "i",
                       "usage": {"input_tokens": 1, "output_tokens": 1}}
     assert pipeline.run(run_id, today=TODAY, extract_fn=liar) == "APPROVED"
-    from engine import rules as r
-    assert list(inspect_params(r.decide)) == ["findings"]
+    from engine import policy as p
+    assert list(inspect_params(p.decide)) == ["findings"]
 
 
 def inspect_params(fn):
@@ -1642,8 +1644,8 @@ def test_vendor_wording_replaces_raw_field_names():
     """A vendor has never seen our field names; a reviewer needs them."""
     f = Finding("R01", FIX, "completeness",
                 "Required field 'contact_phone' is missing")
-    assert rules.correction_request(f) == "Please provide the contact phone number."
-    assert "contact_phone" not in rules.correction_request(f)
+    assert policy.correction_request(f) == "Please provide the contact phone number."
+    assert "contact_phone" not in policy.correction_request(f)
 
 
 def test_reviewer_wording_is_unchanged():
@@ -1661,7 +1663,7 @@ def test_every_kind_of_finding_becomes_something_the_vendor_can_do():
                              "The account number could not be read from the "
                              "Cancelled cheque or bank letter"),
                      "re-upload")):
-        text = rules.correction_request(f)
+        text = policy.correction_request(f)
         assert text.lower().startswith("please")
         assert verb in text.lower()
         assert f.rule_id not in text
@@ -1996,7 +1998,7 @@ def test_every_stage_emits_start_and_end(db):
 
 def test_decide_is_reachable_only_from_findings():
     import inspect
-    src = inspect.getsource(rules.decide)
+    src = inspect.getsource(policy.decide)
     assert "findings" in src
     for word in ("extract", "matching", "anthropic", "client", "submission"):
         assert word not in src
@@ -2007,6 +2009,7 @@ def test_no_ai_module_can_reach_the_decision():
     for module in ("ai/extract.py", "ai/matching.py"):
         src = backend(module).read_text(encoding="utf-8")
         assert "decide(" not in src
+        assert "from engine import policy" not in src
         assert ("from engine import rules" not in src
                 or module.endswith("matching.py"))
 

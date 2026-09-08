@@ -12,6 +12,7 @@ import json
 import pytest
 from conftest import backend as backend_path
 
+from engine import policy
 from engine import rules
 
 TODAY = __import__("datetime").date(2026, 9, 6)
@@ -61,13 +62,13 @@ def finding(rule_id, message, **kw):
 def test_each_kind_of_problem_gets_its_own_instruction(f, expected):
     """No generic "your submission is incomplete" anywhere: the ask names the
     thing to do and the thing to do it to."""
-    assert rules.correction_request(f) == expected
+    assert policy.correction_request(f) == expected
 
 
 def test_an_unreadable_document_asks_for_a_replacement_not_a_correction():
     f = finding("R14", "Nothing could be read from the PAN card — it may be "
                        "blurred, cropped, or a scan of the wrong page")
-    text = rules.correction_request(f)
+    text = policy.correction_request(f)
     assert text.startswith("Please re-upload a clearer copy")
     assert "PAN card" in text
 
@@ -76,7 +77,7 @@ def test_a_mismatch_names_both_sides_so_the_vendor_can_see_which_is_wrong():
     f = finding("R18", "The address proof is for a different state than the "
                        "registered address", expected="Karnataka",
                 actual="Maharashtra")
-    text = rules.correction_request(f)
+    text = policy.correction_request(f)
     assert "Karnataka" in text and "Maharashtra" in text
     assert "address proof" in text
 
@@ -84,13 +85,13 @@ def test_a_mismatch_names_both_sides_so_the_vendor_can_see_which_is_wrong():
 def test_no_instruction_ever_leaks_a_rule_id():
     for rule in rules.RULES:
         f = finding(rule.id, "Something was wrong", expected="a", actual="b")
-        assert rule.id not in rules.correction_request(f)
+        assert rule.id not in policy.correction_request(f)
 
 
 def test_only_fixable_findings_become_asks():
     """A blocking finding is not a correction request, and an uncertain one is
     for a human - never for the vendor."""
-    items = rules.correction_items([
+    items = policy.correction_items([
         finding("R09", "Blocking", severity=rules.BLOCK),
         finding("R09", "Unsure", tag="ai_uncertain"),
         finding("R01", "Required field 'contact_phone' is missing"),
@@ -101,7 +102,7 @@ def test_only_fixable_findings_become_asks():
 def test_the_ask_list_is_this_run_s_findings_and_nothing_else(db):
     run_id, status = run_scenario(db, "ec2_incomplete")
     assert status == "PENDING"
-    items = rules.correction_items(db.get_findings(run_id))
+    items = policy.correction_items(db.get_findings(run_id))
     assert len(items) == len([f for f in db.get_findings(run_id)
                               if f["severity"] == rules.FIX])
     assert any("contact phone number" in i["text"] for i in items)
@@ -178,7 +179,7 @@ def test_an_unsure_comparison_lands_pending_and_stays_correctable(client, db):
     assert not [f for f in findings if f["severity"] == rules.BLOCK]
 
     # A human decides this one, so it is not itemised to the vendor...
-    assert rules.correction_items(findings) == []
+    assert policy.correction_items(findings) == []
     # ...but the case is still PENDING, so the reviewer can reopen it for one.
     assert client.post(f"/api/onboardings/{case_id}/reopen").status_code == 200
     assert db.get_case(case_id)["status"] == db.AWAITING_VENDOR
